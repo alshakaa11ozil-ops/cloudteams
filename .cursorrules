@@ -1,0 +1,229 @@
+# ============================================================
+# .cursorrules — CloudTeams Project Rules for Cursor
+# ============================================================
+# Cursor reads this file automatically before every AI response.
+# This gives Cursor full context about CloudTeams so you never
+# have to re-explain the project. DO NOT DELETE THIS FILE.
+# ============================================================
+
+## WHO YOU ARE
+You are an expert full-stack developer helping build CloudTeams —
+a graduation project at Zhejiang University of Science and Technology (ZUST).
+The developer is a solo student who must understand, explain, and defend
+every line of code at their thesis defense in May.
+
+Write clean, heavily commented, production-quality TypeScript.
+The developer needs to be able to read any function and explain it out loud.
+
+---
+
+## FIRST — READ THE MANIFEST
+Before writing any code, read CLAUDE.md in the project root.
+It contains the full project status, schema, feature list, and decisions.
+It is the single source of truth.
+
+---
+
+## PROJECT CONTEXT
+- **App:** AI-powered team cloud storage platform with soft file locking
+- **Project path:** C:\Users\alsha\Desktop\gproject\cloudteams\cloudteams
+- **GitHub:** https://github.com/alshakaa11ozil-ops/cloudteams
+- **Current week:** Week 2 — building server, database connection, and models
+- **Week 1 done:** tools installed, GitHub live, databases created, .env configured
+
+---
+
+## TECH STACK — NEVER CHANGE THIS
+```
+Frontend:  React + Vite + TypeScript + Tailwind CSS + Axios + React Query
+Backend:   Node.js + Express + TypeScript + Sequelize
+Database:  PostgreSQL 18 — localhost:5432
+           Dev:  cloudteams_dev
+           Test: cloudteams_test
+Auth:      JWT (7-day tokens) + bcrypt
+Real-time: Socket.io
+Jobs:      node-cron
+Deploy:    Vercel (frontend) + Railway (backend)
+```
+
+---
+
+## FOLDER NAMES — CRITICAL
+| Wrong | Correct |
+|---|---|
+| server/ | backend/ |
+| client/ | frontend/ |
+| src/app.ts | src/server.ts |
+
+---
+
+## ARCHITECTURE — EVERY FEATURE NEEDS ALL THESE LAYERS
+```
+backend/src/
+├── models/FeatureName.ts                    ← Sequelize model (database shape)
+├── services/featureName.service.ts          ← ALL business logic lives here
+├── controllers/featureName.controller.ts    ← ONLY handles req/res, calls service
+├── routes/featureName.routes.ts             ← Express router, mounts controller
+└── types/featureName.types.ts               ← TypeScript interfaces for this feature
+```
+
+Rule: Controllers must never contain business logic.
+A controller should only: validate input → call service → send response → catch errors.
+
+---
+
+## COMMENTING RULES — MANDATORY ON EVERY FILE
+The developer presents this code at their university defense.
+Every file MUST have thorough comments. No exceptions.
+
+### RULE 1 — File header (top of every file):
+```typescript
+/**
+ * @file filename.ts
+ * @description What this file does in one or two plain English sentences.
+ *              Explain its role in the system, not just what it contains.
+ */
+```
+
+### RULE 2 — JSDoc on every function and method:
+```typescript
+/**
+ * @description Plain English: what this function does and WHY it exists
+ * @param {Type} paramName - What this parameter represents and why it is needed
+ * @returns {Type} What is returned and what the caller does with it
+ * @throws {Error} When this fails and under what conditions
+ * @example
+ * const token = generateToken(user.id);
+ */
+```
+
+### RULE 3 — Inline comments explain WHY, not WHAT:
+```typescript
+// GOOD — explains the reasoning behind the decision
+const saltRounds = 10; // 10 rounds is the OWASP-recommended minimum for bcrypt
+
+// BAD — just restates what the code already shows
+const saltRounds = 10; // set saltRounds to 10
+```
+
+### RULE 4 — Section dividers group related lines:
+```typescript
+// ─── 1. Validate Input ────────────────────────────────────────
+// ─── 2. Check Database ────────────────────────────────────────
+// ─── 3. Hash Password ─────────────────────────────────────────
+// ─── 4. Save to DB ────────────────────────────────────────────
+// ─── 5. Return Response ───────────────────────────────────────
+```
+
+### RULE 5 — Flag important logic with emoji markers:
+```typescript
+// SOFT LOCK: Marks this file as being edited to prevent conflicts
+// WARNING: This must run inside a DB transaction — race condition risk
+// NOTE: Token expires in 7 days, set by JWT_EXPIRES_IN in .env
+// AUTH: Requires a valid JWT in the Authorization: Bearer header
+// FILE: Stores to local disk in dev, switches to S3 in production
+// CRON: This job runs every 30 minutes to clean up expired locks
+```
+
+### RULE 6 — Comment every database query:
+```typescript
+// Find all files locked for more than 2 hours.
+// This protects against files being permanently locked if a
+// user's browser crashes before they could manually unlock.
+const staleFiles = await File.findAll({
+  where: {
+    isBeingEdited: true,       // only look at currently locked files
+    editingStartedAt: {
+      [Op.lt]: twoHoursAgo     // locked more than 2 hours ago
+    }
+  }
+});
+```
+
+---
+
+## THE SIGNATURE FEATURE — SOFT FILE LOCKING
+This is the most important and unique feature of CloudTeams.
+Always treat it as first-class. Always comment it thoroughly.
+
+How it works:
+1. User opens file → POST /api/files/:id/lock
+   → sets isBeingEdited=true, editedBy=userId, editingStartedAt=NOW()
+2. Other users see: "Alice is currently editing this file"
+3. Every 30 seconds → POST /api/files/:id/heartbeat keeps the lock alive
+4. User closes file → POST /api/files/:id/unlock → clears the lock
+5. Cron job every 30 min → auto-releases locks older than 2 hours (crash safety)
+
+Database columns on the files table:
+  is_being_edited    BOOLEAN DEFAULT FALSE     -- is someone currently editing?
+  edited_by          INTEGER REFERENCES users  -- who has the lock?
+  editing_started_at TIMESTAMP                 -- used to detect expired locks
+
+---
+
+## STANDARD API RESPONSE FORMAT
+Always return this shape:
+
+Success:
+  { success: true, message: 'Optional message', data: { payload } }
+
+Error:
+  { success: false, error: 'ErrorName', message: 'What went wrong' }
+
+---
+
+## ENVIRONMENT VARIABLES — NEVER HARDCODE VALUES
+Always read from process.env. Key variables:
+  DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+  JWT_SECRET, JWT_EXPIRES_IN, BCRYPT_ROUNDS
+  PORT, NODE_ENV, CLIENT_URL, SOCKET_CORS_ORIGIN
+  AGENTROUTER_BASE_URL, AGENTROUTER_API_KEY, AI_MODEL
+  STORAGE_DRIVER, UPLOAD_DIR
+
+---
+
+## TYPESCRIPT RULES
+- No "any" type — always define proper interfaces in /types
+- Always async/await — never raw .then() chains
+- Named exports for services, controllers, middleware
+- Default exports only for Express routers
+- Every Sequelize model must have a TypeScript interface above it
+
+---
+
+## HOW TO RESPOND WHEN ASKED TO BUILD A FEATURE
+1. State which files you will create or modify
+2. Build in order: types → model → service → controller → route
+3. Add ALL comments per the commenting rules above
+4. End with the curl command to verify it works
+5. End with the git commit command:
+   git add . && git commit -m "feat: description of what was built"
+
+---
+
+## WEEK 2 TASKS — BUILD THESE IN ORDER
+  Task 1: backend/src/server.ts               Express app + middleware + Socket.io
+  Task 2: backend/src/config/database.ts      Sequelize connects to cloudteams_dev
+  Task 3: backend/src/models/                 All 8 models (see CLAUDE.md for list)
+  Task 4: backend/src/routes/health.routes.ts GET /api/health returns DB status
+  Task 5: Run migrations, verify in DBeaver
+
+---
+
+## THE 8 DATABASE MODELS (Week 2 Task 3)
+  User.ts         → users           (email, passwordHash, twoFactorSecret)
+  Team.ts         → teams           (name, ownerId)
+  TeamMember.ts   → team_members    (role: viewer / editor / admin)
+  Folder.ts       → folders         (parentFolderId — self-reference for nesting)
+  File.ts         → files           (isBeingEdited, editedBy, editingStartedAt)
+  FileVersion.ts  → file_versions   (versionNumber, storagePath)
+  Comment.ts      → comments        (content, resolved)
+  ActivityLog.ts  → activity_logs   (action, targetType, targetId, metadata)
+  SharedLink.ts   → shared_links    (token, passwordHash, expirationDate, downloadLimit)
+
+---
+
+## REMEMBER
+Claude (claude.ai) = Architect  — planning, reviewing, updating CLAUDE.md
+Cursor            = Builder     — writing files, running commands, editing code
+CLAUDE.md         = Memory      — always read it first, it tracks project state
