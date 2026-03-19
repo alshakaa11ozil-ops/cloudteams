@@ -1,13 +1,15 @@
 // PURPOSE: Initialize Express, register all middleware & routes,
 //   test the database connection, and start listening for requests
 // WHY EXPRESS: Express handles HTTP routing with minimal boilerplate.
-// WHY NO sequelize.sync(): Prisma uses migrations (prisma migrate dev)
+//  Prisma uses migrations (prisma migrate dev)
 //   to manage the schema. We never auto-sync from code — migrations
 //   are safer, explicit, and repeatable.
 
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 // Import our Prisma-based database connection
 // WHY: testConnection() verifies DB is reachable before accepting requests
@@ -25,10 +27,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ============================================================
+ //Security code 
 // MIDDLEWARE — runs on every request before route handlers
 // Think of middleware as an assembly line for every HTTP request
 // ============================================================
-
+//
+// helmet() sets 11 HTTP security headers automatically.
+// WHY: Prevents clickjacking, sniffing attacks, and more.
+// One line protects against many common web vulnerabilities.
+app.use(helmet());
 // cors() — allows your React frontend (port 5173) to call this
 // backend (port 3001). Browsers block cross-origin requests by
 // default — this explicitly allows our frontend origin.
@@ -36,6 +43,19 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true, // Allow cookies and Authorization headers
 }));
+
+// Rate limiter for auth routes only — applied per IP address.
+// WHY: Without this, an attacker can try millions of passwords
+// per second. This limits them to 10 attempts per 15 minutes.
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,                   // max 10 requests per window per IP
+  message: {
+    error: 'Too many attempts, please try again in 15 minutes'
+  },
+  standardHeaders: true,     // Return rate limit info in headers
+  legacyHeaders: false,
+});
 
 // Parse incoming JSON bodies into req.body
 // WHY: Without this, req.body is undefined on POST/PUT requests
