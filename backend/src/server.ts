@@ -17,6 +17,7 @@ import { testConnection } from './config/database';
 
 // Routes
 import healthRouter from './routes/health';
+import authRouter from './routes/auth';
 
 // Load .env file values into process.env
 // WHY FIRST: Must run before anything reads process.env variables
@@ -70,6 +71,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Health check — GET /api/health
 app.use('/api/health', healthRouter);
+app.use('/api/auth', authRouter);
+
 
 // Catch-all for any route that doesn't exist
 // WHY: Returns clean JSON instead of Express's default HTML 404 page
