@@ -14,13 +14,7 @@ import { verifyToken, JwtPayload } from '../utils/jwt';
 //   We extend it here so TypeScript knows req.user exists
 //   after this middleware runs. Without this, TypeScript would
 //   give an error every time we write req.user.userId.
-declare global {
-  namespace Express {
-    interface Request {
-      user?: JwtPayload; // { userId: number, email: string }
-    }
-  }
-}
+
 
 // ============================================================
 // authenticate()

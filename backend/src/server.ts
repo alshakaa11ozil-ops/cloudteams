@@ -68,7 +68,11 @@ app.use(express.urlencoded({ extended: true }));
 // ============================================================
 // ROUTES
 // ============================================================
+// With your other imports at the top:
+import teamRoutes from './routes/teamRoutes';
 
+// With your other app.use() lines:
+app.use('/api/teams', teamRoutes);
 // Health check — GET /api/health
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
