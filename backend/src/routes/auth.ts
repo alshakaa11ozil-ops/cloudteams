@@ -7,6 +7,12 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { register, login, getMe } from '../controllers/auth.controller';
 import { authenticate } from '../middleware/auth.middleware';
+import {
+  setupTwoFactorHandler,
+  verifySetupHandler,
+  twoFactorLoginHandler,
+  disableTwoFactorHandler,
+} from "../controllers/twoFactor.controller";
 
 const router = Router();
 
@@ -40,6 +46,29 @@ router.post('/register', authLimiter, register);
 // WHY NO AUTH: User doesn't have a token yet — they're
 //   providing credentials to GET a token
 router.post('/login', authLimiter, login);
+// ── 2FA Setup (authenticated — user must be logged in first) ──────────────
+// POST /api/auth/2fa/setup
+// Returns QR code + secret. Does NOT enable 2FA yet.
+router.post("/2fa/setup", authenticate, setupTwoFactorHandler);
+
+// POST /api/auth/2fa/verify-setup
+// User submits the secret + first 6-digit code to confirm scan worked.
+// Saves secret to DB and activates 2FA.
+router.post("/2fa/verify-setup", authenticate, verifySetupHandler);
+
+// ── 2FA Login (NOT authenticated — user is mid-login) ─────────────────────
+// POST /api/auth/2fa/login
+// Second step of login. Accepts tempToken + 6-digit code.
+// Returns real JWT on success.
+// WHY NO authenticate middleware?
+//   The user isn't authenticated yet. They only have a tempToken.
+//   The service verifies the tempToken internally.
+router.post("/2fa/login", twoFactorLoginHandler);
+
+// ── Disable 2FA (authenticated) ───────────────────────────────────────────
+// POST /api/auth/2fa/disable
+// Requires a valid 6-digit code to confirm the user controls their app.
+router.post("/2fa/disable", authenticate, disableTwoFactorHandler);
 
 // ─── Protected Routes (token required) ───────────────────────
 

@@ -37,8 +37,8 @@ export interface JwtPayload {
 // WHY THIS APPROACH: Signing with a secret means only our server
 //   can create valid tokens. Any fake token will fail verification.
 // ============================================================
-export const signToken = (payload: JwtPayload): string => {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+export const signToken = (payload: JwtPayload | any, expiresIn: string = JWT_EXPIRES_IN): string => {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: expiresIn as any });
 };
 
 // ============================================================

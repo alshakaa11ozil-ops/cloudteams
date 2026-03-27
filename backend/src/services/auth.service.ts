@@ -6,6 +6,8 @@
 import bcrypt from 'bcrypt';
 import prisma from '../config/database';
 import { signToken } from '../utils/jwt';
+import { issueTempToken } from './twoFactor.service';
+
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -32,6 +34,8 @@ export interface AuthResult {
     email: string;
     createdAt: Date;
   };
+  requiresTwoFactor?: boolean;
+  tempToken?: string;
 }
 
 // ─── Register ─────────────────────────────────────────────────
@@ -112,6 +116,27 @@ export const registerUser = async (input: RegisterInput): Promise<AuthResult> =>
 //   3. Return SAME error for wrong email OR wrong password
 //      (WHY SAME ERROR: tells attackers nothing about which is wrong)
 // ============================================================
+// =============================================================================
+// REPLACE YOUR EXISTING loginUser FUNCTION IN src/services/auth.service.ts
+// WITH THIS. Everything else in auth.service.ts stays exactly the same.
+// =============================================================================
+
+// ADD this import at the top of auth.service.ts alongside your other imports:
+// import { issueTempToken } from "./twoFactor.service";
+
+// ---------------------------------------------------------------------------
+// UPDATED loginUser — now handles 2FA check
+// ---------------------------------------------------------------------------
+// WHAT CHANGED:
+//   After password verification, we now check if the user has 2FA enabled.
+//   If yes → return a tempToken + requiresTwoFactor: true (no real JWT yet)
+//   If no  → return the real JWT as before (existing behaviour unchanged)
+//
+// The AuthResult type needs one addition — add this to your AuthResult type:
+//   requiresTwoFactor?: boolean
+//   tempToken?: string
+// ---------------------------------------------------------------------------
+
 export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
 
   // ── Step 1: Find user by email ─────────────────────────────
@@ -120,10 +145,8 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
   });
 
   // ── Step 2: Verify password ────────────────────────────────
-  // WHY CHECK BOTH TOGETHER: If we returned "user not found" for
-  //   wrong email and "wrong password" separately, attackers could
-  //   enumerate valid emails. Same error = no information leak.
-  // bcrypt.compare() hashes the input and compares to stored hash
+  // WHY CHECK BOTH TOGETHER: Prevents email enumeration attacks.
+  // Same error for "user not found" and "wrong password".
   const passwordValid = user
     ? await bcrypt.compare(input.password, user.password_hash)
     : false;
@@ -132,7 +155,24 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
     throw new Error('INVALID_CREDENTIALS');
   }
 
-  // ── Step 3: Sign JWT token ─────────────────────────────────
+  // ── Step 3: Check if 2FA is enabled ───────────────────────
+  // two_factor_secret is null if 2FA is disabled (the default).
+  // If it's set, the user must complete the 2FA challenge before
+  // receiving a real JWT.
+  if (user.two_factor_secret) {
+    // Issue a SHORT-LIVED tempToken (5 minutes).
+    // This is NOT a full access token — it can only be used at /2fa/login.
+    // The purpose: "2fa_challenge" field prevents it being used elsewhere.
+    const tempToken = issueTempToken(user.id, user.email);
+
+    return {
+      requiresTwoFactor: true,   // tells the client to show the code input screen
+      tempToken,                 // client stores this temporarily
+      // No real token or user data yet — authentication is incomplete
+    } as unknown as AuthResult;
+  }
+
+  // ── Step 4: No 2FA — issue real JWT immediately (existing flow) ──
   const token = signToken({ userId: user.id, email: user.email });
 
   return {

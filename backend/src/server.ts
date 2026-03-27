@@ -18,6 +18,7 @@ import { testConnection } from './config/database';
 // Routes
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
+import fileRoutes from "./routes/fileRoutes";
 
 // Load .env file values into process.env
 // WHY FIRST: Must run before anything reads process.env variables
@@ -28,7 +29,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ============================================================
- //Security code 
+//Security code 
 // MIDDLEWARE — runs on every request before route handlers
 // Think of middleware as an assembly line for every HTTP request
 // ============================================================
@@ -76,7 +77,7 @@ app.use('/api/teams', teamRoutes);
 // Health check — GET /api/health
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
-
+app.use("/api/files", fileRoutes);
 
 // Catch-all for any route that doesn't exist
 // WHY: Returns clean JSON instead of Express's default HTML 404 page

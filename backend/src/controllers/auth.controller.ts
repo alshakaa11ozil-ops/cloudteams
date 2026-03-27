@@ -124,10 +124,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     //   we just verified identity and returned a token
     res.status(200).json({
       message: 'Login successful',
-      token: result.token,
-      user: result.user,
+      ...result,
     });
-
   } catch (error: any) {
     // ── Handle known service errors ──────────────────────────
     if (error.message === 'INVALID_CREDENTIALS') {

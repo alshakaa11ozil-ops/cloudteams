@@ -13,6 +13,7 @@ model User {
   username      String         @unique
   email         String         @unique
   password_hash String
+   two_factor_secret String? 
   created_at    DateTime       @default(now())
   updated_at    DateTime       @updatedAt
   announcements Announcement[]

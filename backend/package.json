@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-"scripts": {
-  "postinstall": "prisma generate",
-  "dev": "nodemon --exec ts-node src/server.ts",
-  "build": "tsc",
-  "start": "node dist/server.js",
-  "db:generate": "prisma generate",
-  "db:migrate": "prisma migrate dev",
-  "db:studio": "prisma studio",
-  "db:reset": "prisma migrate reset"
-},
+  "scripts": {
+    "postinstall": "prisma generate",
+    "dev": "nodemon --exec ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:reset": "prisma migrate reset"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -32,14 +32,19 @@
     "pg": "^8.20.0",
     "pg-hstore": "^2.3.4",
     "prisma": "^7.5.0",
-    "sequelize": "^6.37.8"
+    "qrcode": "^1.5.4",
+    "sequelize": "^6.37.8",
+    "speakeasy": "^2.0.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.5.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/speakeasy": "^2.0.10",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
