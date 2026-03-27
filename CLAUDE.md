@@ -90,13 +90,6 @@ edited_by         ← REMOVED
 editing_started_at ← RENAMED to editingStartedAt (camelCase in Prisma)
 ```
 
-### 2FA Fields (on users table)
-```
-two_factor_secret  String?  -- TOTP secret for Google Authenticator
-```
-This field exists in the schema. 2FA is implemented in Week 3-4.
-
----
 
 ## 5. Completed Milestones
 
@@ -179,7 +172,79 @@ src/
   utils/
     jwt.ts             ✅ (JwtPayload = { userId: number, email: string })
   server.ts            ✅
+## COMPLETED WEEKS (Updated)
 
+* Week 1: GitHub repo, tools installed, databases created
+* Week 2: Express server, PostgreSQL connected, Prisma 7 with pg adapter,
+  9 tables + announcements table created via migrations, health check endpoint
+* Week 3: Full JWT authentication — register, login, getMe, auth middleware,
+  bcrypt password hashing, rate limiting on auth routes
+* Week 4: Team Workspaces, Role-Based Permissions (viewer/editor/admin),
+  Team Announcements feature, requireRole middleware, all tested in Postman
+* Week 5: File Storage — upload, download, list, get metadata, soft delete,
+  SHA-256 deduplication (7/7 Postman tests passed)
+* 2FA (bonus): TOTP-based two-factor authentication — setup, QR code generation,
+  verify-setup, 2FA login challenge (tempToken pattern), disable.
+  All 7 tests passed. Uses speakeasy + qrcode libraries.
+
+## NEW FILES ADDED (Week 5 + 2FA)
+
+src/
+  config/
+    multer.ts              ✅ disk storage, 50MB limit, blocked MIME types
+  utils/
+    hash.ts                ✅ SHA-256 streaming file hash utility
+  services/
+    file.service.ts        ✅ upload, dedup, list, get, download, soft delete
+    twoFactor.service.ts   ✅ generateSetupData, verifySetupAndEnable,
+                              completeTwoFactorLogin, disableTwoFactor,
+                              issueTempToken
+  controllers/
+    file.controller.ts     ✅ 5 file endpoint handlers
+    twoFactor.controller.ts ✅ 4 2FA endpoint handlers
+  routes/
+    fileRoutes.ts          ✅ file routes
+    auth.ts                ✅ MODIFIED — added 4 2FA routes
+
+## MODIFIED FILES (Week 5 + 2FA)
+
+  src/services/auth.service.ts   ✅ loginUser now checks two_factor_secret,
+                                    returns tempToken when 2FA enabled
+  src/controllers/auth.controller.ts ✅ login handler now spreads result
+                                        instead of hardcoding token/user
+  src/utils/jwt.ts               ✅ signToken accepts optional expiresIn param,
+                                    verifyToken exported
+
+## NEW SCHEMA FIELDS
+
+  users table:
+    two_factor_secret  String?   — null = 2FA disabled, base32 secret = enabled
+
+  files table:
+    All fields as per original schema plus lease lock fields (Week 14)
+
+## IMPORTANT PATTERNS LEARNED
+
+* multipart/form-data sends ALL fields as strings — always parseInt() body fields
+* authenticate middleware must run BEFORE multer on upload routes
+* Every res.json() inside an if block must be followed by return
+* Spread result in controller (...result) instead of hardcoding fields —
+  handles multiple return shapes cleanly
+* tempToken pattern: short-lived JWT with purpose: "2fa_challenge" —
+  cannot be used to access protected routes
+
+## API ENDPOINTS (Updated count: 35+)
+
+  POST   /api/files/upload              upload a file (editor/admin only)
+  GET    /api/files/teams/:id/files     list team files
+  GET    /api/files/:id                 get file metadata
+  GET    /api/files/:id/download        download file
+  DELETE /api/files/:id                 soft delete
+
+  POST   /api/auth/2fa/setup            generate secret + QR code
+  POST   /api/auth/2fa/verify-setup     confirm scan + enable 2FA
+  POST   /api/auth/2fa/login            complete login with 6-digit code
+  POST   /api/auth/2fa/disable          disable 2FA (requires valid code)
 ---
 
 ## 7. API Endpoints
