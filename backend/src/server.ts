@@ -19,6 +19,8 @@ import { testConnection } from './config/database';
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
 import fileRoutes from "./routes/fileRoutes";
+import folderRoutes from './routes/folderRoutes';
+import searchRoutes from './routes/searchRoutes';
 
 // Load .env file values into process.env
 // WHY FIRST: Must run before anything reads process.env variables
@@ -27,6 +29,7 @@ dotenv.config();
 // Create the Express application instance
 const app = express();
 const PORT = process.env.PORT || 3001;
+
 
 // ============================================================
 //Security code 
@@ -78,7 +81,8 @@ app.use('/api/teams', teamRoutes);
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
 app.use("/api/files", fileRoutes);
-
+app.use('/api/folders', folderRoutes);// alongside your other app.use() calls:
+app.use('/api/search', searchRoutes);
 // Catch-all for any route that doesn't exist
 // WHY: Returns clean JSON instead of Express's default HTML 404 page
 app.use((req, res) => {

@@ -62,13 +62,15 @@ model TeamMember {
 }
 
 model Folder {
-  id               Int      @id @default(autoincrement())
+  id               Int       @id @default(autoincrement())
   team_id          Int
   parent_folder_id Int?
   name             String
   created_by       Int
-  created_at       DateTime @default(now())
-  updated_at       DateTime @updatedAt
+  is_deleted       Boolean   @default(false)   // NEW — soft delete flag
+  deleted_at       DateTime?                   // NEW — when it was deleted
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
 
   // Relations
   team     Team     @relation(fields: [team_id], references: [id], onDelete: Cascade)
@@ -78,7 +80,6 @@ model Folder {
 
   @@map("folders")
 }
-
 model File {
   id            Int       @id @default(autoincrement())
   team_id       Int

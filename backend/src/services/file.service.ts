@@ -20,6 +20,7 @@ import path from "path";
 import prisma from "../config/database"; // Prisma singleton
 import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
 import { UPLOADS_DIR } from "../config/multer"; // single source of truth for upload dir
+import { assertTeamMember, AppError } from '../utils/teamGuard';
 
 // ---------------------------------------------------------------------------
 // CUSTOM ERROR CLASSES
@@ -67,26 +68,7 @@ export class ForbiddenError extends Error {
 //   duplicating the same Prisma query 5 times. If the check logic ever
 //   changes (e.g. add suspended-member status), we update one place.
 // ---------------------------------------------------------------------------
-const verifyTeamMembership = async (
-    userId: number,
-    teamId: number
-): Promise<void> => {
-    const membership = await prisma.teamMember.findUnique({
-        where: {
-            // Prisma uses the @@unique([team_id, user_id]) composite key
-            // defined in schema.prisma as the identifier for findUnique
-            team_id_user_id: {
-                team_id: teamId,
-                user_id: userId,
-            },
-        },
-    });
 
-    if (!membership) {
-        // User is not in this team — throw before any file operation proceeds
-        throw new ForbiddenError("You are not a member of this team");
-    }
-};
 
 // ---------------------------------------------------------------------------
 // HELPER: verifyEditorRole
@@ -264,7 +246,7 @@ export const getTeamFiles = async (
     userId: number
 ): Promise<object[]> => {
     // Any team member (viewer, editor, admin) can list files
-    await verifyTeamMembership(userId, teamId);
+    await assertTeamMember(userId, teamId);
 
     const files = await prisma.file.findMany({
         where: {
@@ -309,36 +291,86 @@ export const getFileById = async (
     fileId: number,
     userId: number
 ): Promise<object> => {
-    // Fetch the file first — we need its team_id to check membership
     const file = await prisma.file.findUnique({
         where: { id: fileId },
         include: {
             uploader: {
-                select: {
-                    id: true,
-                    username: true,
-                    email: true,
-                },
+                select: { id: true, username: true, email: true },
             },
         },
     });
 
-    // File doesn't exist at all (bad ID) OR was hard-deleted (shouldn't happen
-    // with soft delete, but defensive check)
     if (!file) {
-        throw new FileNotFoundError();
+        throw new AppError('File not found', 404);
     }
 
-    // Soft-deleted files are treated as gone from the user's perspective
     if (file.is_deleted) {
-        throw new FileNotFoundError("File has been deleted");
+        throw new AppError('File has been deleted', 404);
     }
 
-    // Now we know the file's team_id — check that the user is in that team
-    await verifyTeamMembership(userId, file.team_id);
+    // assertTeamMember replaces verifyTeamMembership — same logic, shared utility
+    await assertTeamMember(userId, file.team_id);
 
     return file;
 };
+
+// PURPOSE: List all non-deleted files in a team.
+//          Supports optional folderId filter for folder browsing.
+//          folderId=null → show only root-level files (no folder)
+//          folderId=3    → show only files inside folder 3
+//          folderId omitted → show ALL files in the team
+//
+// INPUTS:  teamId, userId, folderId (optional — number | null | undefined)
+// OUTPUTS: Array of file records with uploader info
+//
+// WHY THREE STATES for folderId:
+//   undefined = no filter, return everything (default file browser)
+//   null      = return only root-level files (folder_id IS NULL in DB)
+//   number    = return only files in that specific folder
+export async function listFiles(
+    teamId: number,
+    userId: number,
+    folderId?: number | null  // undefined = no filter, null = root level
+) {
+    // Verify user belongs to this team before returning any data
+    const membership = await prisma.teamMember.findFirst({
+        where: { user_id: userId, team_id: teamId },
+    });
+
+    if (!membership) {
+        throw new Error('You are not a member of this team');
+    }
+
+    // Build the folder_id filter dynamically based on what was passed
+    // WHY: Prisma needs different filter shapes for each case
+    let folderFilter: { folder_id?: number | null } = {};
+
+    if (folderId === null) {
+        // Caller explicitly wants root-level files only
+        // In Prisma, { equals: null } matches rows where folder_id IS NULL
+        folderFilter = { folder_id: null };
+    } else if (folderId !== undefined) {
+        // Caller wants files inside a specific folder
+        folderFilter = { folder_id: folderId };
+    }
+    // If folderId is undefined — folderFilter stays empty → no filter applied
+
+    const files = await prisma.file.findMany({
+        where: {
+            team_id: teamId,
+            is_deleted: false,
+            ...folderFilter, // spread the dynamic filter in
+        },
+        include: {
+            uploader: {
+                select: { id: true, username: true, email: true },
+            },
+        },
+        orderBy: { created_at: 'desc' },
+    });
+
+    return files;
+}
 
 // ===========================================================================
 // SERVICE FUNCTION 4: getDownloadPath
@@ -450,6 +482,7 @@ export const softDeleteFile = async (
             deleted_at: new Date(), // current timestamp — when was this deleted?
         },
     });
+
 
     // No return value needed — the controller will send 200 { message: "File deleted" }
 };

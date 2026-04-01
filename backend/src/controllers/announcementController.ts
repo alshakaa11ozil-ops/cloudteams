@@ -14,6 +14,7 @@
 
 import { Request, Response } from 'express';
 import * as announcementService from '../services/announcementService';
+import { AppError } from '../utils/teamGuard';
 
 // ============================================================
 // CONTROLLER: createAnnouncement
@@ -34,7 +35,7 @@ export async function createAnnouncement(req: Request, res: Response) {
       res.status(400).json({ error: 'Announcement body is required' });
       return;
     }
- 
+
     const authorId = req.user!.userId;
 
     const announcement = await announcementService.createAnnouncement(
@@ -47,16 +48,12 @@ export async function createAnnouncement(req: Request, res: Response) {
 
     res.status(201).json({ message: 'Announcement posted', announcement });
   } catch (error) {
-    if (error instanceof announcementService.TeamNotFoundError) {
-      res.status(404).json({ error: error.message });
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    if (error instanceof announcementService.InsufficientPermissionError) {
-      res.status(403).json({ error: error.message });
-      return;
-    }
-    console.error('[createAnnouncement]', error);
-    res.status(500).json({ error: 'Failed to post announcement' });
+    console.error('[AnnouncementController]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
 
@@ -86,19 +83,19 @@ export async function getAnnouncementById(req: Request, res: Response) {
   try {
     const teamId = parseInt(req.params.id as string, 10);
     const announcementId = parseInt(req.params.announcementId as string, 10);
- 
+
     const announcement = await announcementService.getAnnouncementById(
       announcementId,
       teamId
     );
     res.status(200).json({ announcement });
   } catch (error) {
-    if (error instanceof announcementService.AnnouncementNotFoundError) {
-      res.status(404).json({ error: error.message });
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    console.error('[getAnnouncementById]', error);
-    res.status(500).json({ error: 'Failed to fetch announcement' });
+    console.error('[AnnouncementController]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
 // ============================================================
@@ -111,14 +108,14 @@ export async function updateAnnouncement(req: Request, res: Response) {
     const teamId = parseInt(req.params.id as string, 10);
     const announcementId = parseInt(req.params.announcementId as string, 10);
     const { title, body, isPinned } = req.body;
- 
+
     if (title === undefined && body === undefined && isPinned === undefined) {
       res.status(400).json({ error: 'Provide at least one field: title, body, or isPinned' });
       return;
     }
- 
+
     const requestingUserId = req.user!.userId;  // JWT uses userId
- 
+
     const updated = await announcementService.updateAnnouncement(
       announcementId,
       teamId,
@@ -127,16 +124,12 @@ export async function updateAnnouncement(req: Request, res: Response) {
     );
     res.status(200).json({ message: 'Announcement updated', announcement: updated });
   } catch (error) {
-    if (error instanceof announcementService.AnnouncementNotFoundError) {
-      res.status(404).json({ error: error.message });
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    if (error instanceof announcementService.InsufficientPermissionError) {
-      res.status(403).json({ error: error.message });
-      return;
-    }
-    console.error('[updateAnnouncement]', error);
-    res.status(500).json({ error: 'Failed to update announcement' });
+    console.error('[AnnouncementController]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
 
@@ -145,13 +138,13 @@ export async function updateAnnouncement(req: Request, res: Response) {
 // Route: DELETE /api/teams/:id/announcements/:announcementId
 // Access: Author or Admin (checked inside service)
 // ============================================================
- 
+
 export async function deleteAnnouncement(req: Request, res: Response) {
   try {
     const teamId = parseInt(req.params.id as string, 10);
     const announcementId = parseInt(req.params.announcementId as string, 10);
     const requestingUserId = req.user!.userId;  // JWT uses userId
- 
+
     await announcementService.deleteAnnouncement(
       announcementId,
       teamId,
@@ -159,15 +152,11 @@ export async function deleteAnnouncement(req: Request, res: Response) {
     );
     res.status(200).json({ message: 'Announcement deleted' });
   } catch (error) {
-    if (error instanceof announcementService.AnnouncementNotFoundError) {
-      res.status(404).json({ error: error.message });
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
-    if (error instanceof announcementService.InsufficientPermissionError) {
-      res.status(403).json({ error: error.message });
-      return;
-    }
-    console.error('[deleteAnnouncement]', error);
-    res.status(500).json({ error: 'Failed to delete announcement' });
+    console.error('[AnnouncementController]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }

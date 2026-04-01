@@ -27,8 +27,11 @@ import {
     softDeleteFile,
     FileNotFoundError,
     ForbiddenError,
+    listFiles,
 } from "../services/file.service";
-import multer from "multer"; // imported for MulterError instanceof check
+import multer from "multer"; // imported for MulterError instanceof check.
+
+
 
 // ---------------------------------------------------------------------------
 // CONTROLLER 1: uploadFileHandler
@@ -107,6 +110,7 @@ export const uploadFileHandler = async (
             isDuplicate,
             file,
         });
+
     } catch (err) {
         // multer throws MulterError for limit violations (file too large, too many files)
         // LIMIT_FILE_SIZE is the specific code for our 50MB limit
@@ -132,6 +136,8 @@ export const uploadFileHandler = async (
         res.status(500).json({ error: "Internal server error during upload" });
     }
 };
+
+
 
 // ---------------------------------------------------------------------------
 // CONTROLLER 2: getTeamFilesHandler
@@ -284,6 +290,47 @@ export const downloadFileHandler = async (
     }
 };
 
+
+// CONTROLLER: listFilesHandler
+// Route: GET /api/teams/:id/files
+// Optional query params:
+//   ?folderId=3     → files inside folder 3
+//   ?folderId=null  → root-level files only
+//   (omitted)       → all files in the team
+export async function listFilesHandler(req: Request, res: Response) {
+    try {
+        const userId = req.user!.userId;
+        const teamId = parseInt(req.params.id as string, 10);
+
+        if (isNaN(teamId)) {
+            res.status(400).json({ error: 'Invalid team ID' });
+            return;
+        }
+
+        // Parse the optional folderId query param
+        // Three possible values from the URL:
+        //   not present → undefined (no filter)
+        //   "null"      → null (root level only)
+        //   "3"         → 3 (specific folder)
+        let folderId: number | null | undefined;
+
+        if (req.query.folderId === undefined) {
+            folderId = undefined; // no filter
+        } else if (req.query.folderId === 'null') {
+            folderId = null; // root level
+        } else {
+            const parsed = parseInt(req.query.folderId as string, 10);
+            // If the value isn't a valid number, ignore the filter
+            folderId = isNaN(parsed) ? undefined : parsed;
+        }
+
+        const files = await listFiles(teamId, userId, folderId);
+        res.status(200).json({ files });
+    } catch (error) {
+        console.error('[listFilesHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}
 // ---------------------------------------------------------------------------
 // CONTROLLER 5: softDeleteFileHandler
 // ---------------------------------------------------------------------------

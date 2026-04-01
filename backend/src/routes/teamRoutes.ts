@@ -3,7 +3,7 @@ import { authenticate } from '../middleware/auth.middleware';;
 import { requireRole } from '../middleware/requireRole';
 import * as teamController from '../controllers/teamController';
 import announcementRoutes from './announcementRoutes';
-
+import { getTeamFoldersHandler } from '../controllers/folderController';// Add this import at the top of teamRoutes.ts//
 const router = Router();
 
 router.post('/', authenticate, teamController.createTeam);
@@ -14,5 +14,5 @@ router.get('/:id/members', authenticate, requireRole('viewer'), teamController.g
 router.patch('/:id/members/:userId', authenticate, requireRole('admin'), teamController.changeMemberRole);
 router.delete('/:id/members/:userId', authenticate, requireRole('admin'), teamController.removeMember);
 router.use('/:id/announcements', announcementRoutes);
-
+router.get('/:id/folders', authenticate, getTeamFoldersHandler);// Add this route alongside your existing team routes//
 export default router;

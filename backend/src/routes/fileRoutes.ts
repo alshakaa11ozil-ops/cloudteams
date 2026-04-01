@@ -29,7 +29,11 @@ import {
     getFileByIdHandler,
     downloadFileHandler,
     softDeleteFileHandler,
+    listFilesHandler,
 } from "../controllers/file.controller";
+
+import { moveFileHandler } from '../controllers/folderController';// Add this import at the top of fileRoutes.ts//
+
 
 const router = Router();
 
@@ -77,6 +81,8 @@ router.get(
     getTeamFilesHandler
 );
 
+
+router.get('/teams/:id/files', authenticate, listFilesHandler);
 // ---------------------------------------------------------------------------
 // GET /api/files/:id
 // ---------------------------------------------------------------------------
@@ -118,4 +124,7 @@ router.delete(
     softDeleteFileHandler
 );
 
+// Add this route — PATCH a file to move it to a different folder
+
+router.patch('/:id', authenticate, moveFileHandler);
 export default router;
