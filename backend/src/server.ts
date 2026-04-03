@@ -21,6 +21,9 @@ import authRouter from './routes/auth';
 import fileRoutes from "./routes/fileRoutes";
 import folderRoutes from './routes/folderRoutes';
 import searchRoutes from './routes/searchRoutes';
+import recycleBinRoutes from './routes/recycleBinRoutes';
+import commentRoutes from './routes/commentRoutes';
+import versionRoutes from './routes/versionRoutes';
 
 // Load .env file values into process.env
 // WHY FIRST: Must run before anything reads process.env variables
@@ -83,6 +86,10 @@ app.use('/api/auth', authRouter);
 app.use("/api/files", fileRoutes);
 app.use('/api/folders', folderRoutes);// alongside your other app.use() calls:
 app.use('/api/search', searchRoutes);
+app.use('/api/teams', recycleBinRoutes);
+app.use('/api/teams', commentRoutes);
+app.use('/api/teams', versionRoutes);
+
 // Catch-all for any route that doesn't exist
 // WHY: Returns clean JSON instead of Express's default HTML 404 page
 app.use((req, res) => {

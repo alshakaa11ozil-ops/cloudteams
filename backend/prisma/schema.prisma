@@ -21,9 +21,12 @@ model User {
   teams         TeamMember[]
   files         File[]         @relation("FileUploader")
   lockedFiles   File[]         @relation("FileLockOwner")
+  fileVersions  FileVersion[]  @relation("FileVersionUploader")
   comments      Comment[]
   activityLogs  ActivityLog[]
   sharedLinks   SharedLink[]
+  folders       Folder[]
+ 
 
   @@map("users")
 }
@@ -75,6 +78,7 @@ model Folder {
   // Relations
   team     Team     @relation(fields: [team_id], references: [id], onDelete: Cascade)
   files    File[]
+  creator  User     @relation(fields: [created_by], references: [id])
   parent   Folder?  @relation("FolderChildren", fields: [parent_folder_id], references: [id])
   children Folder[] @relation("FolderChildren")
 
@@ -129,7 +133,8 @@ model FileVersion {
   created_at     DateTime @default(now())
 
   // Relations
-  file File @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  file     File @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  uploader User @relation("FileVersionUploader", fields: [uploaded_by], references: [id])
 
   @@map("file_versions")
 }
@@ -141,6 +146,8 @@ model Comment {
   user_id    Int
   content    String
   resolved   Boolean  @default(false)
+  is_deleted Boolean  @default(false)
+  deleted_at DateTime?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
