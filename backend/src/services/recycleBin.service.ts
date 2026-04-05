@@ -42,10 +42,10 @@ export const getUnifiedRecycleBin = async (teamId: number, userId: number) => {
         listDeletedFolders(teamId, userId)
     ]);
 
-    return { 
-        files, 
-        folders, 
-        total: files.length + folders.length 
+    return {
+        files,
+        folders,
+        total: files.length + folders.length
     };
 };
 
@@ -310,7 +310,7 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
         where: { team_id: teamId, is_deleted: true },
         select: { id: true, parent_folder_id: true },
     });
-    
+
     const descendantIds = getAllDescendantIds(folderId, allDeletedFolders);
     const folderIdsToDelete = [folderId, ...descendantIds];
 
@@ -331,7 +331,7 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
         where: { id: { in: folderIdsToDelete } }
     });
 
-    return { 
+    return {
         message: 'Folder hierarchy permanently deleted',
         deletedFolders: deletedFolders.count,
         deletedFiles: filesToDelete.length

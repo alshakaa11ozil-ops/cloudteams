@@ -1,6 +1,7 @@
 import prisma from '../config/database';
 import { Prisma, PrismaClient } from '../generated/prisma';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 
 /**
  * PURPOSE: Internal helper to snapshot the current state of a File into a FileVersion row.
@@ -9,7 +10,7 @@ import { assertTeamMember, AppError } from '../utils/teamGuard';
  * @param tx optional Prisma transaction client to ensure atomicity
  */
 export const createVersion = async (
-    fileId: number, 
+    fileId: number,
     tx: Omit<Prisma.TransactionClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"> = prisma
 ) => {
     const file = await tx.file.findUnique({
@@ -121,19 +122,18 @@ export const restoreVersion = async (fileId: number, versionNumber: number, team
                 uploaded_by: userId,
             }
         });
-        
+
         // Log the action!
         await tx.activityLog.create({
             data: {
                 team_id: teamId,
                 user_id: userId,
-                action: 'file.version.restored',
+                action: 'version_restored',
                 target_type: 'file',
                 target_id: fileId,
                 metadata: { restored_to_version: versionNumber }
             }
         });
-
         return restoredFile;
     });
 

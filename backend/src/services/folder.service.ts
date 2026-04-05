@@ -2,6 +2,7 @@
 
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 // ─────────────────────────────────────────────
 // CUSTOM ERROR CLASS
 // PURPOSE: Lets controllers know WHAT went wrong and WHAT HTTP status to send.
@@ -137,7 +138,14 @@ export async function createFolder(
             parent_folder_id: parentFolderId ?? null,
         },
     });
-
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_created',
+        targetType: 'folder',
+        targetId: folder.id,
+        metadata: { name: folder.name, parentFolderId: parentFolderId ?? null },
+    })
     return folder;
 }
 
@@ -205,7 +213,14 @@ export async function renameFolder(
         where: { id: folderId },
         data: { name: newName },
     });
-
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_renamed',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: { oldName: folder.name, newName },
+    });
     return updated;
 }
 
@@ -347,7 +362,14 @@ export async function deleteFolder(
             data: { is_deleted: true, deleted_at: now },
         }),
     ]);
-
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_deleted',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: { mode: recursive, folderId },
+    });
     return {
         deletedFolders: updatedFolders.count,
         deletedFiles: updatedFiles.count,
@@ -409,6 +431,13 @@ export async function moveFile(
         where: { id: fileId },
         data: { folder_id: targetFolderId },
     });
-
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_moved',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: { fileId, targetFolderId },
+    });
     return updated;
 }

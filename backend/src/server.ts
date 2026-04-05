@@ -1,97 +1,97 @@
 // PURPOSE: Initialize Express, register all middleware & routes,
-//   test the database connection, and start listening for requests
-// WHY EXPRESS: Express handles HTTP routing with minimal boilerplate.
-//  Prisma uses migrations (prisma migrate dev)
-//   to manage the schema. We never auto-sync from code — migrations
-//   are safer, explicit, and repeatable.
+//   test the database connection, and start listening for requests.
+//   Also initializes Socket.io for real-time lock events and
+//   starts the cron job for auto-expiring stale leases.
 
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import http from 'http';
+// WHY http.createServer instead of app.listen:
+//   Socket.io must attach to the raw Node.js HTTP server, not the
+//   Express app. We create the server manually so we can pass it
+//   to both Express AND Socket.io. Same port, two handlers.
 
-// Import our Prisma-based database connection
-// WHY: testConnection() verifies DB is reachable before accepting requests
 import { testConnection } from './config/database';
+import { initSocket } from './socket';
+import { startCronJobs } from './cron';
 
 // Routes
 import healthRouter from './routes/health';
 import authRouter from './routes/auth';
-import fileRoutes from "./routes/fileRoutes";
+import teamRoutes from './routes/teamRoutes';
+import lockRoutes from './routes/lock.routes';
+import fileRoutes from './routes/fileRoutes';
 import folderRoutes from './routes/folderRoutes';
 import searchRoutes from './routes/searchRoutes';
 import recycleBinRoutes from './routes/recycleBinRoutes';
 import commentRoutes from './routes/commentRoutes';
 import versionRoutes from './routes/versionRoutes';
 
-// Load .env file values into process.env
-// WHY FIRST: Must run before anything reads process.env variables
+// Load .env values into process.env — must run before anything
+// reads process.env variables
 dotenv.config();
 
-// Create the Express application instance
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ============================================================
+// SECURITY MIDDLEWARE
+// Runs on every request before any route handler.
+// ============================================================
 
-// ============================================================
-//Security code 
-// MIDDLEWARE — runs on every request before route handlers
-// Think of middleware as an assembly line for every HTTP request
-// ============================================================
-//
-// helmet() sets 11 HTTP security headers automatically.
-// WHY: Prevents clickjacking, sniffing attacks, and more.
-// One line protects against many common web vulnerabilities.
+// Sets 11 HTTP security headers automatically.
+// Prevents clickjacking, MIME sniffing, and more.
 app.use(helmet());
-// cors() — allows your React frontend (port 5173) to call this
-// backend (port 3001). Browsers block cross-origin requests by
-// default — this explicitly allows our frontend origin.
+
+// Allows our React frontend (port 5173) to call this backend.
+// Browsers block cross-origin requests by default.
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true, // Allow cookies and Authorization headers
+  credentials: true,
 }));
 
-// Rate limiter for auth routes only — applied per IP address.
-// WHY: Without this, an attacker can try millions of passwords
-// per second. This limits them to 10 attempts per 15 minutes.
+// Rate limiter — applied to auth routes only.
+// Limits each IP to 10 login attempts per 15 minutes.
+// Prevents brute-force password attacks.
 export const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,                   // max 10 requests per window per IP
-  message: {
-    error: 'Too many attempts, please try again in 15 minutes'
-  },
-  standardHeaders: true,     // Return rate limit info in headers
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many attempts, please try again in 15 minutes' },
+  standardHeaders: true,
   legacyHeaders: false,
 });
 
-// Parse incoming JSON bodies into req.body
-// WHY: Without this, req.body is undefined on POST/PUT requests
+// Parse JSON bodies into req.body.
+// Without this, req.body is undefined on POST/PATCH requests.
 app.use(express.json());
-
-// Parse form-encoded bodies (fallback for non-JSON requests)
 app.use(express.urlencoded({ extended: true }));
 
 // ============================================================
 // ROUTES
+// Order matters — more specific paths must come before wildcards.
 // ============================================================
-// With your other imports at the top:
-import teamRoutes from './routes/teamRoutes';
 
-// With your other app.use() lines:
-app.use('/api/teams', teamRoutes);
-// Health check — GET /api/health
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
-app.use("/api/files", fileRoutes);
-app.use('/api/folders', folderRoutes);// alongside your other app.use() calls:
+app.use('/api/teams/:teamId/files/:fileId', lockRoutes);
+app.use('/api/teams', teamRoutes);
+app.use('/api/files', fileRoutes);
+app.use('/api/folders', folderRoutes);
 app.use('/api/search', searchRoutes);
+
+// Lock routes — mounted under the file-level path.
+// :teamId and :fileId are available inside lock.routes.ts
+// because we set mergeParams: true in that router.
+
+
 app.use('/api/teams', recycleBinRoutes);
 app.use('/api/teams', commentRoutes);
 app.use('/api/teams', versionRoutes);
 
-// Catch-all for any route that doesn't exist
-// WHY: Returns clean JSON instead of Express's default HTML 404 page
+// Catch-all 404 — returns clean JSON instead of Express HTML page.
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not Found',
@@ -100,27 +100,48 @@ app.use((req, res) => {
 });
 
 // ============================================================
-// startServer()
-// PURPOSE: Verify DB is reachable, then start the HTTP server
-// WHY ASYNC: DB test is async — we must await it before
-//   accepting any requests. A server without a DB is broken.
+// startServer
+// PURPOSE:  Verify DB is reachable, create the HTTP server,
+//           attach Socket.io, start cron jobs, then listen.
+// WHY THIS ORDER:
+//   1. Test DB first — a server without a DB is broken.
+//   2. Create http.Server from Express app.
+//   3. initSocket(httpServer) — must happen before listen()
+//      so Socket.io is ready when first client connects.
+//   4. startCronJobs() — starts the background scheduler.
+//   5. httpServer.listen() — start accepting connections.
 // ============================================================
 const startServer = async () => {
-  // Step 1: Verify Prisma can reach PostgreSQL
-  // If this fails, the process exits immediately with a clear error
+  // Step 1: Verify Prisma can reach PostgreSQL.
+  // Exits the process if the DB is unreachable.
   await testConnection();
 
-  // Step 2: Start listening for HTTP requests
-  // WHY NO sync(): Prisma uses migrations — schema is managed
-  //   by 'npx prisma migrate dev', not by application code.
-  //   This is safer and more explicit than Sequelize's auto-sync.
-  app.listen(PORT, () => {
+  // Step 2: Create the raw HTTP server from the Express app.
+  // This is what Socket.io attaches to.
+  const httpServer = http.createServer(app);
+
+  // Step 3: Attach Socket.io to the HTTP server.
+  // After this line, WebSocket connections are accepted on the
+  // same port as HTTP — no second port needed.
+  initSocket(httpServer);
+
+  // Step 4: Start the cron job scheduler.
+  // Registers the stale lease cleanup job (runs every 30 min).
+  startCronJobs();
+
+  // Step 5: Start listening for connections.
+  // WHY httpServer.listen (not app.listen):
+  //   app.listen creates its OWN internal http.Server which
+  //   Socket.io does not know about. We must listen on the
+  //   same httpServer we passed to initSocket().
+  httpServer.listen(PORT, () => {
     console.log(`🚀 CloudTeams API running on http://localhost:${PORT}`);
     console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔌 Socket.io ready for real-time connections`);
+    console.log(`⏰ Cron jobs active`);
   });
 };
 
-// Start the server
 startServer();
 
 export default app;

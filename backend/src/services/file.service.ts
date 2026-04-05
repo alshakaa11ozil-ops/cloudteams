@@ -21,6 +21,7 @@ import prisma from "../config/database"; // Prisma singleton
 import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
 import { UPLOADS_DIR } from "../config/multer"; // single source of truth for upload dir
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 
 // ---------------------------------------------------------------------------
 // CUSTOM ERROR CLASSES
@@ -218,7 +219,14 @@ export const uploadFile = async (
             is_deleted: false,                   // not deleted on creation
         },
     });
-
+    void logActivity({
+        teamId,
+        userId: uploadedBy,          // your function uses uploadedBy, not userId
+        action: 'file_uploaded',
+        targetType: 'file',
+        targetId: file.id,
+        metadata: { filename: file.filename, fileSize: file.file_size, isDuplicate },
+    });
     return { file, isDuplicate };
 };
 
@@ -483,6 +491,15 @@ export const softDeleteFile = async (
         },
     });
 
+    // After: await prisma.file.update({ where: { id: fileId }, data: { ... } });
 
+    void logActivity({
+        teamId: (file as { team_id: number }).team_id,
+        userId,
+        action: 'file_deleted',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: { fileId },
+    });
     // No return value needed — the controller will send 200 { message: "File deleted" }
 };

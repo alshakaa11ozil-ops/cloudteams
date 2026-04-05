@@ -1,6 +1,6 @@
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
-
+import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 /**
  * MENTION_REGEX: Looks for the '@' symbol followed by alphanumeric characters.
  * Example matches: "@alice", "@john_doe123"
@@ -33,7 +33,14 @@ export const addComment = async (fileId: number, teamId: number, userId: number,
         },
         include: { user: { select: { username: true } } }
     });
-
+    void logActivity({
+        teamId,
+        userId,
+        action: 'comment_added',
+        targetType: 'comment',
+        targetId: comment.id,
+        metadata: { fileId, preview: content.slice(0, 100) },
+    });
     // 4. Parse @Mentions out of the text content
     // content.matchAll returns an iterable of all regex matches
     const matches = Array.from(content.matchAll(MENTION_REGEX));
