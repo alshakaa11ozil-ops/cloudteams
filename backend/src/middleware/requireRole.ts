@@ -65,7 +65,8 @@ export function requireRole(minimumRole: 'viewer' | 'editor' | 'admin') {
 
       // The teamId always comes from the URL parameter :id
       // e.g., GET /api/teams/42/members → teamId = "42"
-      const teamId = parseInt(req.params.id as string, 10);
+      // CORRECT — accept whichever name Express stored it under
+      const teamId = parseInt(String(req.params.teamId ?? req.params.id), 10);
 
       // parseInt returns NaN for non-numeric strings — guard against that
       if (isNaN(teamId)) {

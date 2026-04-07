@@ -45,14 +45,6 @@ function extractRequestMeta(req: Request): { ip: string; userAgent: string } {
 // ============================================================
 
 export async function acquireLock(req: Request, res: Response): Promise<void> {
-    console.log('FULL REQ PARAMS:', JSON.stringify(req.params));
-    console.log('FULL REQ URL:', req.url);
-    console.log('FULL REQ PATH:', req.path);
-    // TEMPORARY DEBUG — remove after fixing
-    console.log('RAW PARAMS:', req.params);
-    console.log('RAW teamId string:', req.params.teamId);
-    console.log('PARSED teamId:', parseInt(String(req.params.teamId), 10));
-    console.log('PARSED fileId:', parseInt(String(req.params.fileId), 10));
 
     const teamId = parseInt(String(req.params.teamId), 10);
     const fileId = parseInt(String(req.params.fileId), 10);
