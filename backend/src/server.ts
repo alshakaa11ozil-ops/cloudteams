@@ -29,6 +29,7 @@ import searchRoutes from './routes/searchRoutes';
 import recycleBinRoutes from './routes/recycleBinRoutes';
 import commentRoutes from './routes/commentRoutes';
 import versionRoutes from './routes/versionRoutes';
+import shareRoutes from './routes/shareRoutes';
 
 // Load .env values into process.env — must run before anything
 // reads process.env variables
@@ -90,6 +91,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/teams', recycleBinRoutes);
 app.use('/api/teams', commentRoutes);
 app.use('/api/teams', versionRoutes);
+app.use('/api/share', shareRoutes);
 
 // Catch-all 404 — returns clean JSON instead of Express HTML page.
 app.use((req, res) => {

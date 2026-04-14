@@ -1,0 +1,1 @@
+"src/middleware/auth.middleware.ts(110,21): error TS2304: Cannot find name 'jwt'.\r\nsrc/routes/auth.ts(16,10): error TS2305: Module '\"../services/auth.service\"' has no exported member 'blacklistToken'.\r\n"

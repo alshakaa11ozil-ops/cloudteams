@@ -9,42 +9,43 @@ datasource db {
 }
 
 model User {
-  id            Int            @id @default(autoincrement())
-  username      String         @unique
-  email         String         @unique
-  password_hash String
-   two_factor_secret String? 
-  created_at    DateTime       @default(now())
-  updated_at    DateTime       @updatedAt
-  announcements Announcement[]
-  // Relations
-  teams         TeamMember[]
-  files         File[]         @relation("FileUploader")
-  lockedFiles   File[]         @relation("FileLockOwner")
-  fileVersions  FileVersion[]  @relation("FileVersionUploader")
-  comments      Comment[]
-  activityLogs  ActivityLog[]
-  sharedLinks   SharedLink[]
-  folders       Folder[]
- 
+  id                   Int            @id @default(autoincrement())
+  username             String         @unique
+  email                String         @unique
+  password_hash        String
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+  two_factor_secret    String?
+  two_factor_confirmed Boolean        @default(false)
+  activityLogs         ActivityLog[]
+  announcements        Announcement[]
+  comments             Comment[]
+  fileVersions         FileVersion[]  @relation("FileVersionUploader")
+  lockedFiles          File[]         @relation("FileLockOwner")
+  files                File[]         @relation("FileUploader")
+  folders              Folder[]
+  sharedLinks          SharedLink[]
+  teams                TeamMember[]
 
   @@map("users")
 }
 
 model Team {
-  id            Int            @id @default(autoincrement())
-  name          String
-  description   String?
-  owner_id      Int
-  created_at    DateTime       @default(now())
-  updated_at    DateTime       @updatedAt
-  announcements Announcement[]
-  // Relations
-  members       TeamMember[]
-  folders       Folder[]
-  files         File[]
-  comments      Comment[]
-  activityLogs  ActivityLog[]
+  id                  Int            @id @default(autoincrement())
+  name                String
+  description         String?
+  owner_id            Int
+  created_at          DateTime       @default(now())
+  updated_at          DateTime       @updatedAt
+  invite_code         String?        @unique @db.VarChar(8)
+  invite_code_enabled Boolean?       @default(true)
+  activityLogs        ActivityLog[]
+  announcements       Announcement[]
+  comments            Comment[]
+  files               File[]
+  folders             Folder[]
+  sharedLinks         SharedLink[]
+  members             TeamMember[]
 
   @@map("teams")
 }
@@ -53,12 +54,10 @@ model TeamMember {
   id         Int      @id @default(autoincrement())
   team_id    Int
   user_id    Int
-  role       String   @default("viewer") // "viewer" | "editor" | "admin"
+  role       String   @default("viewer")
   created_at DateTime @default(now())
-
-  // Relations
-  team Team @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  team       Team     @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@unique([team_id, user_id])
   @@map("team_members")
@@ -70,55 +69,46 @@ model Folder {
   parent_folder_id Int?
   name             String
   created_by       Int
-  is_deleted       Boolean   @default(false)   // NEW — soft delete flag
-  deleted_at       DateTime?                   // NEW — when it was deleted
   created_at       DateTime  @default(now())
   updated_at       DateTime  @updatedAt
-
-  // Relations
-  team     Team     @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  files    File[]
-  creator  User     @relation(fields: [created_by], references: [id])
-  parent   Folder?  @relation("FolderChildren", fields: [parent_folder_id], references: [id])
-  children Folder[] @relation("FolderChildren")
+  deleted_at       DateTime?
+  is_deleted       Boolean   @default(false)
+  files            File[]
+  creator          User      @relation(fields: [created_by], references: [id])
+  parent           Folder?   @relation("FolderChildren", fields: [parent_folder_id], references: [id])
+  children         Folder[]  @relation("FolderChildren")
+  team             Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
 
   @@map("folders")
 }
+
 model File {
-  id            Int       @id @default(autoincrement())
-  team_id       Int
-  folder_id     Int?
-  filename      String
-  original_name String
-  file_size     Int
-  mime_type     String
-  storage_path  String
-  hash          String? // SHA-256 for deduplication
-  uploaded_by   Int
-  is_deleted    Boolean   @default(false)
-  deleted_at    DateTime?
-  created_at    DateTime  @default(now())
-  updated_at    DateTime  @updatedAt
-
-  // --- LEASE LOCK FIELDS ---
-  // WHO holds the lock (null = file is free)
+  id               Int           @id @default(autoincrement())
+  team_id          Int
+  folder_id        Int?
+  filename         String
+  original_name    String
+  file_size        Int
+  mime_type        String
+  storage_path     String
+  hash             String?
+  uploaded_by      Int
+  is_deleted       Boolean       @default(false)
+  deleted_at       DateTime?
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
   lockOwnerUserId  Int?
-  // SECRET token given to lock owner — required to extend or release
-  lockToken        String?   @db.VarChar(36)
-  // WHEN the lease expires — lock is auto-released after this time
+  lockToken        String?       @db.VarChar(36)
   lockExpiresAt    DateTime?
-  // WHEN editing started — used for UI display only ("Alice editing for 5 min")
   editingStartedAt DateTime?
+  comments         Comment[]
+  versions         FileVersion[]
+  folder           Folder?       @relation(fields: [folder_id], references: [id])
+  lockOwner        User?         @relation("FileLockOwner", fields: [lockOwnerUserId], references: [id])
+  team             Team          @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  uploader         User          @relation("FileUploader", fields: [uploaded_by], references: [id])
+  sharedLinks      SharedLink[]
 
-  // Relations
-  team      Team          @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  folder    Folder?       @relation(fields: [folder_id], references: [id])
-  uploader  User          @relation("FileUploader", fields: [uploaded_by], references: [id])
-  lockOwner User?         @relation("FileLockOwner", fields: [lockOwnerUserId], references: [id])
-  comments  Comment[]
-  versions  FileVersion[]
-
-  // Index for fast lock expiry checks (only indexes locked files)
   @@index([lockExpiresAt], map: "idx_files_lock_expiry")
   @@map("files")
 }
@@ -131,30 +121,26 @@ model FileVersion {
   file_size      Int
   uploaded_by    Int
   created_at     DateTime @default(now())
-
-  // Relations
-  file     File @relation(fields: [file_id], references: [id], onDelete: Cascade)
-  uploader User @relation("FileVersionUploader", fields: [uploaded_by], references: [id])
+  file           File     @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  uploader       User     @relation("FileVersionUploader", fields: [uploaded_by], references: [id])
 
   @@map("file_versions")
 }
 
 model Comment {
-  id         Int      @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   file_id    Int
   team_id    Int
   user_id    Int
   content    String
-  resolved   Boolean  @default(false)
-  is_deleted Boolean  @default(false)
+  resolved   Boolean   @default(false)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
   deleted_at DateTime?
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
-  // Relations
-  file File @relation(fields: [file_id], references: [id], onDelete: Cascade)
-  team Team @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  user User @relation(fields: [user_id], references: [id])
+  is_deleted Boolean   @default(false)
+  file       File      @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  team       Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [user_id], references: [id])
 
   @@map("comments")
 }
@@ -163,24 +149,22 @@ model ActivityLog {
   id          Int      @id @default(autoincrement())
   team_id     Int?
   user_id     Int?
-  action      String // e.g. "file.locked", "file.uploaded", "user.login"
-  target_type String? // e.g. "file", "folder", "team"
+  action      String
+  target_type String?
   target_id   Int?
-  metadata    Json? // flexible extra data (IP, userAgent, lockToken, etc.)
+  metadata    Json?
   ip          String?
   userAgent   String?
   created_at  DateTime @default(now())
-
-  // Relations
-  team Team? @relation(fields: [team_id], references: [id])
-  user User? @relation(fields: [user_id], references: [id])
+  team        Team?    @relation(fields: [team_id], references: [id])
+  user        User?    @relation(fields: [user_id], references: [id])
 
   @@map("activity_logs")
 }
 
 model SharedLink {
   id              Int       @id @default(autoincrement())
-  file_id         Int
+  file_id         Int?
   created_by      Int
   token           String    @unique
   password_hash   String?
@@ -188,9 +172,10 @@ model SharedLink {
   download_limit  Int?
   downloads_count Int       @default(0)
   created_at      DateTime  @default(now())
-
-  // Relations
-  creator User @relation(fields: [created_by], references: [id])
+  team_id         Int
+  creator         User      @relation(fields: [created_by], references: [id])
+  file            File?     @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  team            Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
 
   @@map("shared_links")
 }
@@ -204,9 +189,17 @@ model Announcement {
   isPinned  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  team   Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   @@map("announcements")
+}
+
+model TokenBlacklist {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@map("token_blacklist")
 }

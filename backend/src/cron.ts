@@ -161,3 +161,39 @@ async function expireStaleLeases(): Promise<void> {
         );
     }
 }
+// ===========================================================================
+// CRON JOB: cleanExpiredBlacklistTokens
+// ===========================================================================
+// PURPOSE: Deletes rows from token_blacklist where the token has already
+//          naturally expired. An expired token is rejected by jwt.verify()
+//          BEFORE the blacklist check runs — so these rows are dead weight.
+//
+// SCHEDULE: Every hour ('0 * * * *')
+//   — Tokens live max 7 days, so hourly cleanup is more than sufficient.
+//   — Running it more often wastes DB resources; less often grows the table.
+//
+// WHY THIS MATTERS:
+//   Without cleanup, the blacklist table grows without bound. Every logout
+//   adds a row. A large table makes the findUnique lookup slower and wastes
+//   storage. Cleanup keeps the table containing only ACTIVE revocations.
+// ===========================================================================
+cron.schedule('0 * * * *', async () => {
+    try {
+        const result = await prisma.tokenBlacklist.deleteMany({
+            where: {
+                // expires_at < NOW() means the JWT's own expiry has passed.
+                // jwt.verify() would already reject these tokens on its own.
+                // Deleting them is safe — they can never be used again regardless.
+                expires_at: { lt: new Date() }
+            }
+        });
+
+        // Only log if something was actually deleted — reduces log noise
+        if (result.count > 0) {
+            console.log(`[cron] Cleaned ${result.count} expired blacklist token(s)`);
+        }
+    } catch (error) {
+        // Never let a cron failure crash the server — just log and continue
+        console.error('[cron] Blacklist cleanup failed:', error);
+    }
+});

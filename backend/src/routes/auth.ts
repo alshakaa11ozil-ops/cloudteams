@@ -3,7 +3,7 @@
 //   Each feature has its own routes file. server.ts just
 //   mounts them — it doesn't know what's inside them.
 
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { register, login, getMe } from '../controllers/auth.controller';
 import { authenticate } from '../middleware/auth.middleware';
@@ -11,8 +11,11 @@ import {
   setupTwoFactorHandler,
   verifySetupHandler,
   twoFactorLoginHandler,
-  disableTwoFactorHandler,
+  disableTwoFactorHandler
 } from "../controllers/twoFactor.controller";
+import { logout } from '../services/auth.service';
+import { assertTeamMember, AppError } from '../utils/teamGuard';
+
 
 const router = Router();
 
@@ -70,6 +73,24 @@ router.post("/2fa/login", twoFactorLoginHandler);
 // Requires a valid 6-digit code to confirm the user controls their app.
 router.post("/2fa/disable", authenticate, disableTwoFactorHandler);
 
+// POST /api/auth/logout
+// authenticate runs FIRST — only a logged-in user can log out.
+// This also guarantees req.headers.authorization exists and is valid
+// before we even try to blacklist the token.
+router.post('/logout', authenticate, async (req: Request, res: Response) => {
+  try {
+    // Pass the raw Authorization header — the service extracts the token
+    await logout(req.headers.authorization);
+
+    res.status(200).json({ message: 'Logged out successfully' });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 // ─── Protected Routes (token required) ───────────────────────
 
 // GET /api/auth/me

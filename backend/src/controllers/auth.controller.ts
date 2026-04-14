@@ -66,10 +66,10 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     // ── Step 4: Send success response ───────────────────────
     // WHY 201: HTTP 201 = "Created" — a new resource was created
     //   (vs 200 = "OK" which means something already existed)
+    // We spread ...result to include requiresTwoFactor, tempToken, and twoFactorSetup
     res.status(201).json({
       message: 'Account created successfully',
-      token: result.token,
-      user: result.user,
+      ...result,
     });
 
   } catch (error: any) {

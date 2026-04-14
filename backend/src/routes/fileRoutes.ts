@@ -32,7 +32,8 @@ import {
     listFilesHandler,
 } from "../controllers/file.controller";
 
-import { moveFileHandler } from '../controllers/folderController';// Add this import at the top of fileRoutes.ts//
+import { moveFileHandler } from '../controllers/folderController';
+import { createFileLinkHandler } from '../controllers/share.controller';
 
 
 const router = Router();
@@ -127,4 +128,6 @@ router.delete(
 // Add this route — PATCH a file to move it to a different folder
 
 router.patch('/:id', authenticate, moveFileHandler);
+router.post('/:id/share', authenticate, createFileLinkHandler);
+
 export default router;

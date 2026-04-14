@@ -111,7 +111,7 @@ export const generateSetupData = async (
   // Fetch user to get their email (used as the account label in the QR code)
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, email: true, two_factor_secret: true },
+    select: { id: true, email: true, two_factor_secret: true, two_factor_confirmed: true },
   });
 
   if (!user) throw new UserNotFoundError();
@@ -174,33 +174,50 @@ export const generateSetupData = async (
 // ===========================================================================
 export const verifySetupAndEnable = async (
   userId: number,
-  secret: string,
   code: string
-): Promise<void> => {
-  // Verify the code against the secret BEFORE saving anything to the DB.
-  // speakeasy.totp.verify() independently computes what the code should be
-  // right now, and compares it to what the user submitted.
+): Promise<{ token: string; user: any }> => {
+  // Step 1: Fetch the user to get their saved (but unconfirmed) secret
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, two_factor_secret: true },
+  });
+
+  if (!user || !user.two_factor_secret) {
+    throw new TwoFactorNotEnabledError("No 2FA setup in progress.");
+  }
+
+  // Step 2: Verify the code against the stored secret
   const isValid = speakeasy.totp.verify({
-    secret,          // the base32 secret from the setup step
-    encoding: "base32", // tell speakeasy the secret format
-    token: code,     // the 6-digit code the user typed
-    window: 1,       // accept ±1 time window (±30 seconds) for clock drift
+    secret: user.two_factor_secret,
+    encoding: "base32",
+    token: code,
+    window: 1, // ±30 seconds
   });
 
   if (!isValid) {
-    // Code didn't match — user probably scanned the wrong QR code or
-    // typed incorrectly. Don't save anything.
     throw new InvalidTwoFactorCodeError(
-      "Code is invalid. Please scan the QR code again and try once more."
+      "Code is invalid. Please check your authenticator app and try again."
     );
   }
 
-  // Code is valid → save the secret to the database
-  // From this moment on, every login for this user requires a 2FA code
-  await prisma.user.update({
+  // Step 3: Code is valid → Mark 2FA as confirmed
+  const updatedUser = await prisma.user.update({
     where: { id: userId },
-    data: { two_factor_secret: secret },
+    data: { two_factor_confirmed: true },
   });
+
+  // Step 4: Issue the REAL JWT token (just like a full login)
+  const token = signToken({ userId: updatedUser.id, email: updatedUser.email });
+
+  return {
+    token,
+    user: {
+      id: updatedUser.id,
+      name: updatedUser.username,
+      email: updatedUser.email,
+      createdAt: updatedUser.created_at,
+    },
+  };
 };
 
 // ===========================================================================
@@ -265,12 +282,21 @@ export const completeTwoFactorLogin = async (
       username: true,
       email: true,
       two_factor_secret: true,
+      two_factor_confirmed: true,
       created_at: true,
     },
   });
 
   if (!user) throw new UserNotFoundError();
   if (!user.two_factor_secret) throw new TwoFactorNotEnabledError();
+
+  // Ensuring 2FA is fully verified before allowing a challenge login.
+  // If not confirmed, they should be go through /verify-setup instead.
+  if (!user.two_factor_confirmed) {
+    throw new InvalidTwoFactorCodeError(
+        "Two-factor setup is incomplete. Please finish setup first."
+    );
+  }
 
   // Step 4: Verify the 6-digit code against the stored secret
   const isValid = speakeasy.totp.verify({
@@ -328,7 +354,7 @@ export const disableTwoFactor = async (
 ): Promise<void> => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, two_factor_secret: true },
+    select: { id: true, two_factor_secret: true, two_factor_confirmed: true },
   });
 
   if (!user) throw new UserNotFoundError();
@@ -356,7 +382,10 @@ export const disableTwoFactor = async (
   // Next login will go straight to JWT without 2FA challenge
   await prisma.user.update({
     where: { id: userId },
-    data: { two_factor_secret: null },
+    data: { 
+      two_factor_secret: null,
+      two_factor_confirmed: false,
+    },
   });
 };
 

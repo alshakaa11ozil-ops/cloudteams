@@ -23,7 +23,9 @@ export type ActivityAction =
     | 'lock_expired'
     | 'forced_unlock'
     | 'comment_added'
-    | 'version_restored';
+    | 'version_restored'
+    | 'link_created'
+    | 'link_revoked';
 
 export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user';
 

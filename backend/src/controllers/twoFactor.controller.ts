@@ -97,23 +97,27 @@ export const verifySetupHandler = async (
     res: Response
 ): Promise<void> => {
     try {
-        const { secret, code } = req.body;
+        const { code } = req.body;
 
-        // Basic validation — both fields are required
-        if (!secret || !code) {
-            res.status(400).json({ error: "secret and code are required" });
+        // Only code is required now — secret is fetched from DB via service
+        if (!code) {
+            res.status(400).json({ error: "Code is required" });
             return;
         }
 
         // code should be exactly 6 digits
         if (!/^\d{6}$/.test(code)) {
-            res.status(400).json({ error: "code must be exactly 6 digits" });
+            res.status(400).json({ error: "Code must be exactly 6 digits" });
             return;
         }
 
-        await verifySetupAndEnable(req.user!.userId, secret, code);
+        const result = await verifySetupAndEnable(req.user!.userId, code);
 
-        res.status(200).json({ message: "2FA enabled successfully. Your account is now protected." });
+        res.status(200).json({ 
+            message: "Two-factor authentication enabled successfully. You are now logged in.",
+            token: result.token,
+            user: result.user
+        });
     } catch (err) {
         if (err instanceof InvalidTwoFactorCodeError) {
             res.status(400).json({ error: err.message });

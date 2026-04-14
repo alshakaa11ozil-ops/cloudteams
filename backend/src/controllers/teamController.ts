@@ -41,6 +41,7 @@
 
 import { Request, Response } from 'express';
 import * as teamService from '../services/teamService';
+import { AppError } from '../utils/teamGuard';
 
 // ============================================================
 // createTeam
@@ -142,11 +143,16 @@ export async function getUserTeams(req: Request, res: Response) {
 export async function getTeamById(req: Request, res: Response) {
   try {
     const teamId = parseInt(req.params.id as string, 10);
-    const team = await teamService.getTeamById(teamId);
+    const userId = req.user!.userId;
+    const team = await teamService.getTeamById(teamId, userId);
     res.status(200).json({ team });
   } catch (error) {
     if (error instanceof teamService.TeamNotFoundError) {
       res.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ error: error.message });
       return;
     }
     console.error('[getTeamById]', error);
