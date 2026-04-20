@@ -16,12 +16,15 @@
 // =============================================================================
 
 import fs from "fs";
+import mammoth from "mammoth";
+import * as xlsx from "xlsx";
 import path from "path";
 import prisma from "../config/database"; // Prisma singleton
 import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
 import { UPLOADS_DIR } from "../config/multer"; // single source of truth for upload dir
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { createVersion } from './version.service';
 
 // ---------------------------------------------------------------------------
 // CUSTOM ERROR CLASSES
@@ -153,80 +156,129 @@ export const uploadFile = async (
     multerFile: Express.Multer.File,
     teamId: number,
     uploadedBy: number,
+    ip: string,
+    userAgent: string,
     folderId?: number
 ): Promise<{ file: object; isDuplicate: boolean }> => {
     // STEP 1: Verify the uploader has editor or admin role in this team
     await verifyEditorRole(uploadedBy, teamId);
 
-    // STEP 2: Calculate SHA-256 hash of the uploaded file
-    // multerFile.path is the relative path multer saved the file to,
-    // e.g. "uploads/1710000000000-report.pdf"
-    const hash = await calculateFileHash(multerFile.path);
-
-    // STEP 3: Check for an existing file with this hash in this team
-    // WHY is_deleted: false?
-    //   A deleted file's storage_path may be cleaned up eventually.
-    //   We only deduplicate against LIVE files whose path is guaranteed valid.
-    const existingFile = await prisma.file.findFirst({
+    // STEP 3: Check for an existing file with the same NAME in the same FOLDER
+    // WHY? If 'report.pdf' already exists, we should create a new version of it,
+    // NOT a separate file record. This satisfies the "Versioning" requirement.
+    const fileWithSameName = await prisma.file.findFirst({
         where: {
-            hash,           // same content fingerprint
-            team_id: teamId, // scoped to this team
-            is_deleted: false, // only live files
+            original_name: multerFile.originalname,
+            folder_id: folderId ?? null,
+            team_id: teamId,
+            is_deleted: false,
         },
     });
 
-    // STEP 4: Decide whether to keep the uploaded file or discard it
+    // STEP 4: Calculate SHA-256 hash of the uploaded file
+    const hash = await calculateFileHash(multerFile.path);
+
+    // STEP 5: Check for an existing file with this HASH (Content Deduplication)
+    // We do this FIRST to ensure versions can also be deduplicated!
+    const existingContent = await prisma.file.findFirst({
+        where: {
+            hash,
+            team_id: teamId,
+            is_deleted: false,
+        },
+    });
+
     let storagePath: string;
     let isDuplicate: boolean;
 
-    if (existingFile) {
-        // DUPLICATE DETECTED
-        // The uploaded file is byte-for-byte identical to an existing team file.
-        // We don't need the new copy — delete it from disk to save space.
-        //
-        // WHY fs.unlinkSync here (synchronous)?
-        //   This is a cleanup step, not an I/O bottleneck. The file was just
-        //   written moments ago and is small in the context of the full request.
-        //   Synchronous keeps the code linear and easier to reason about.
-        //   An async unlink could technically continue even if we return early.
-        fs.unlinkSync(multerFile.path); // delete the redundant uploaded copy
-
-        // The new DB record will point to the existing file's storage path
-        storagePath = existingFile.storage_path;
+    if (existingContent) {
+        // Content duplicate -> delete redundant disk copy
+        if (fs.existsSync(multerFile.path)) {
+            fs.unlinkSync(multerFile.path);
+        }
+        storagePath = existingContent.storage_path;
         isDuplicate = true;
     } else {
-        // NEW FILE — keep it on disk, use its path
-        storagePath = multerFile.path; // e.g. "uploads/1710000000000-report.pdf"
+        // Truly new file
+        storagePath = multerFile.path;
         isDuplicate = false;
     }
 
-    // STEP 5: Create a File record in the database
-    // Even for duplicates, we create a NEW record. This is important because:
-    //   - The new record has its own uploaded_by, created_at, folder_id
-    //   - The user can delete their record without affecting others
-    //   - The activity feed logs this user's upload separately
+    if (fileWithSameName) {
+        // NAME CLASH -> POTENTIAL NEW VERSION
+        
+        if (fileWithSameName.hash === hash) {
+            // EXACT SAME FILE UPLOADED AGAIN (Same Name AND Same Content)
+            // It's already deduplicated above (fs.unlinkSync ran).
+            // Do NOT create a version. Just return the existing file to avoid spamming versions.
+            return { file: fileWithSameName, isDuplicate: true };
+        }
+
+        // DIFFERENT CONTENT -> CREATE A NEW VERSION
+        // 1. Snapshot the CURRENT state of the file into FileVersion table
+        await createVersion(fileWithSameName.id);
+
+        // 2. Update the main File record with the NEW upload data
+        const updatedFile = await prisma.file.update({
+            where: { id: fileWithSameName.id },
+            data: {
+                filename: multerFile.filename,
+                file_size: multerFile.size,
+                mime_type: multerFile.mimetype,
+                storage_path: storagePath, // Use the deduplicated or new path!
+                hash: hash,
+                uploaded_by: uploadedBy,
+                updated_at: new Date(),
+            },
+        });
+
+        void logActivity({
+            teamId,
+            userId: uploadedBy,
+            action: 'file_version_created', // Specific action for versioning
+            targetType: 'file',
+            targetId: updatedFile.id,
+            metadata: {
+                file_name: updatedFile.original_name,
+                version_created: true,
+            },
+            ip,
+            userAgent,
+        });
+
+        return { file: updatedFile, isDuplicate: false };
+    }
+
+    // STEP 6: NO NAME CLASH -> Create a brand-new File record
     const file = await prisma.file.create({
         data: {
             team_id: teamId,
-            folder_id: folderId ?? null, // null means root level of the team
-            filename: multerFile.filename,       // safe internal name with timestamp prefix
-            original_name: multerFile.originalname, // what the user called it
-            file_size: multerFile.size,          // bytes
-            mime_type: multerFile.mimetype,      // e.g. "application/pdf"
-            storage_path: storagePath,           // where the actual bytes live on disk
-            hash,                                // SHA-256 fingerprint
-            uploaded_by: uploadedBy,             // FK to users.id
-            is_deleted: false,                   // not deleted on creation
+            folder_id: folderId ?? null,
+            filename: multerFile.filename,
+            original_name: multerFile.originalname,
+            file_size: multerFile.size,
+            mime_type: multerFile.mimetype,
+            storage_path: storagePath,
+            hash,
+            uploaded_by: uploadedBy,
+            is_deleted: false,
         },
     });
+    
     void logActivity({
         teamId,
         userId: uploadedBy,          // your function uses uploadedBy, not userId
         action: 'file_uploaded',
         targetType: 'file',
         targetId: file.id,
-        metadata: { filename: file.filename, fileSize: file.file_size, isDuplicate },
+        metadata: {
+            file_name: file.original_name,   // ← THIS is what the renderer looks for
+            file_size: file.file_size,        // keep for reference but we'll hide it
+        },
+        ip,
+        userAgent,
     });
+    
     return { file, isDuplicate };
 };
 
@@ -471,13 +523,20 @@ export const getDownloadPath = async (
 // ===========================================================================
 export const softDeleteFile = async (
     fileId: number,
-    userId: number
+    userId: number,
+    ip: string,
+    userAgent: string
 ): Promise<void> => {
     // Step 1: fetch file and check it exists (getFileById checks membership too)
-    const file = (await getFileById(fileId, userId)) as { team_id: number };
+    const file = (await getFileById(fileId, userId)) as any;
 
     // Step 2: verify the user has editor or admin role — viewers cannot delete
     await verifyEditorRole(userId, file.team_id);
+
+    // Step 3: verify the file is not locked by someone else
+    if (file.lockExpiresAt && file.lockExpiresAt > new Date() && file.lockOwnerUserId !== userId) {
+        throw new AppError('Cannot delete file: it is currently locked by another user', 409);
+    }
 
     // Step 3: perform the soft delete
     // We set is_deleted = true and record exactly when this happened.
@@ -499,7 +558,202 @@ export const softDeleteFile = async (
         action: 'file_deleted',
         targetType: 'file',
         targetId: fileId,
-        metadata: { fileId },
+        metadata: {
+            fileId,
+            file_name: file.original_name,   // ← THIS is what the renderer looks for
+
+        },
+        ip,
+        userAgent,
     });
     // No return value needed — the controller will send 200 { message: "File deleted" }
+};
+
+// ===========================================================================
+// SERVICE FUNCTION 6: renameFile
+// ===========================================================================
+// PURPOSE: Update the display name (original_name) of a file.
+//          The internal storage filename stays the same — we only change
+//          what the user sees. This preserves the audit trail on disk.
+//
+// INPUTS:
+//   fileId  (number) — which file to rename
+//   newName (string) — the new display name the user typed
+//   teamId  (number) — used to verify the file belongs to this team
+//   userId  (number) — must be editor or admin to rename
+//
+// OUTPUTS:
+//   Promise<File> — the updated file record with new original_name
+//
+// WHY RENAME original_name AND NOT filename?
+//   `filename` is the internal storage name with a timestamp prefix
+//   (e.g. "1710000000-report.pdf"). Changing it would break the file path
+//   on disk. `original_name` is purely a display label — safe to change.
+// ===========================================================================
+export const renameFile = async (
+    fileId: number,
+    newName: string,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+): Promise<object> => {
+    // Step 1: verify editor/admin role (viewers cannot rename)
+    await verifyEditorRole(userId, teamId);
+
+    // Step 2: find the file — must belong to this team and not be deleted
+    const file = await prisma.file.findFirst({
+        where: {
+            id: fileId,
+            team_id: teamId,
+            is_deleted: false,
+        },
+    });
+
+    if (!file) {
+        throw new AppError('File not found', 404);
+    }
+
+    // Step 3: verify the file is not locked by someone else
+    if (file.lockExpiresAt && file.lockExpiresAt > new Date() && file.lockOwnerUserId !== userId) {
+        throw new AppError('Cannot rename file: it is currently locked by another user', 409);
+    }
+
+    // Step 3: update only the display name — storage path untouched
+    const updated = await prisma.file.update({
+        where: { id: fileId },
+        data: { original_name: newName.trim() },
+    });
+
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_renamed',   // Corrected action
+        targetType: 'file',
+        targetId: fileId,
+        metadata: { oldName: file.original_name, newName: newName.trim() },
+
+
+    });
+
+    return updated;
+};
+
+// ===========================================================================
+// SERVICE FUNCTION 7: getFilePreview
+// ===========================================================================
+// PURPOSE: Support native browser viewing without forcing download.
+//          Returns streamable info for images/PDFs, or converted HTML
+//          for documents like DOCX and XLSX.
+// ===========================================================================
+export const getFilePreview = async (
+    fileId: number,
+    userId: number,
+    teamId: number
+): Promise<{
+    streamable?: boolean;
+    previewable: boolean;
+    storagePath?: string;
+    mimeType?: string;
+    type?: 'html';
+    content?: string;
+}> => {
+    // 1. Verify access via team structure
+    await assertTeamMember(userId, teamId);
+
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: false }
+    });
+
+    if (!file) throw new AppError('File not found', 404);
+
+    const absolutePath = path.resolve(file.storage_path);
+    if (!fs.existsSync(absolutePath)) {
+        throw new AppError('File missing from disk', 500);
+    }
+
+    const mime = file.mime_type.toLowerCase();
+
+    // Direct streams
+    if (mime === 'application/pdf' || mime.startsWith('image/')) {
+        return {
+            streamable: true,
+            previewable: true,
+            storagePath: absolutePath,
+            mimeType: mime
+        };
+    }
+
+    // DOCX conversion
+    if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || mime.includes('word')) {
+        try {
+            const buffer = await fs.promises.readFile(absolutePath);
+            const result = await mammoth.convertToHtml({ buffer });
+            return { previewable: true, type: 'html', content: result.value };
+        } catch (error) {
+            return { previewable: false };
+        }
+    }
+
+    // XLSX conversion
+    if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mime === 'application/vnd.ms-excel' || mime.includes('excel') || mime.includes('sheet')) {
+        try {
+            const workbook = xlsx.readFile(absolutePath);
+            const sheetName = workbook.SheetNames[0];
+            const html = xlsx.utils.sheet_to_html(workbook.Sheets[sheetName]);
+            return { previewable: true, type: 'html', content: html };
+        } catch (error) {
+            return { previewable: false };
+        }
+    }
+
+    // ─── Plain text and code files ──────────────────────────────────────────────
+    // WHY: text/plain, .txt, .md, .csv, .js, .ts, .py, .java, .json etc.
+    // These are the simplest case — just read the file and wrap in <pre> tags.
+    // <pre> preserves whitespace and line breaks. Syntax highlighting is optional.
+    if (
+        mime.startsWith('text/') ||
+        mime === 'application/json' ||
+        mime === 'application/javascript' ||
+        mime === 'application/xml' ||
+        ['.txt', '.md', '.csv', '.js', '.ts', '.py', '.java', '.json', '.xml', '.html', '.css', '.sql']
+            .some(ext => file.original_name.toLowerCase().endsWith(ext))
+    ) {
+        try {
+            const content = await fs.promises.readFile(absolutePath, 'utf-8');
+            const escaped = content
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #1e293b;
+      background: #f8fafc;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body><pre>${escaped}</pre></body>
+</html>`;
+
+            return { previewable: true, type: 'html', content: html };
+        } catch {
+            return { previewable: false };
+        }
+    }
+    return { previewable: false };
 };

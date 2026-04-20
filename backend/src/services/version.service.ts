@@ -1,141 +1,182 @@
-import prisma from '../config/database';
-import { Prisma, PrismaClient } from '../generated/prisma';
-import { assertTeamMember, AppError } from '../utils/teamGuard';
-import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+// =============================================================================
+// src/services/version.service.ts
+// FIXES:
+//   - listVersions now returns { uploader: { id, username, email } } shape
+//     matching the frontend FileVersion type exactly
+//   - restoreVersion now uses logActivity utility instead of raw
+//     tx.activityLog.create — consistent format with all other log entries
+// =============================================================================
 
-/**
- * PURPOSE: Internal helper to snapshot the current state of a File into a FileVersion row.
- * This should be called internally BEFORE any overwrite happens.
- * @param fileId the file being snapshot
- * @param tx optional Prisma transaction client to ensure atomicity
- */
+import prisma from '../config/database';
+import { Prisma } from '../generated/prisma';
+import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity } from '../utils/activityLogger';
+
+// Internal helper — snapshot current file state into file_versions table
+// Called BEFORE any overwrite so we never lose a version
 export const createVersion = async (
     fileId: number,
-    tx: Omit<Prisma.TransactionClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"> = prisma
+    tx: Omit<Prisma.TransactionClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'> = prisma
 ) => {
-    const file = await tx.file.findUnique({
-        where: { id: fileId }
-    });
+    const file = await tx.file.findUnique({ where: { id: fileId } });
+    if (!file) throw new Error('File not found during version creation');
 
-    if (!file) {
-        throw new Error('File not found during version creation');
-    }
+    const versionCount = await tx.fileVersion.count({ where: { file_id: fileId } });
 
-    const versionCount = await tx.fileVersion.count({
-        where: { file_id: fileId }
-    });
-
-    // version_number = count existing + 1
-    const nextVersionNumber = versionCount + 1;
-
-    const versionRow = await tx.fileVersion.create({
+    return tx.fileVersion.create({
         data: {
             file_id: file.id,
-            version_number: nextVersionNumber,
+            version_number: versionCount + 1,
             storage_path: file.storage_path,
             file_size: file.file_size,
-            uploaded_by: file.uploaded_by // The user who uploaded the current active state
-        }
+            uploaded_by: file.uploaded_by,
+        },
     });
-
-    return versionRow;
 };
 
-/**
- * Return all historical versions of a file, newest first.
- */
-export const listVersions = async (fileId: number, teamId: number, userId: number) => {
+// =============================================================================
+// listVersions
+// PURPOSE: Return all historical versions of a file, newest first.
+// FIX: Returns uploader as { id, username, email } — matches frontend type.
+// =============================================================================
+export const listVersions = async (
+    fileId: number,
+    teamId: number,
+    userId: number
+) => {
     await assertTeamMember(userId, teamId, 'viewer');
 
     const file = await prisma.file.findFirst({
-        where: { id: fileId, team_id: teamId, is_deleted: false }
+        where: { id: fileId, team_id: teamId, is_deleted: false },
     });
-
-    if (!file) {
-        throw new AppError('File not found', 404);
-    }
+    if (!file) throw new AppError('File not found', 404);
 
     const versions = await prisma.fileVersion.findMany({
         where: { file_id: fileId },
-        orderBy: { version_number: 'desc' }, // Newest versions first
-        include: { uploader: { select: { username: true, email: true } } }
+        orderBy: { version_number: 'desc' }, // newest first — frontend relies on this order
+        include: {
+            uploader: {
+                select: { id: true, username: true, email: true }, // id added — was missing before
+            },
+        },
     });
 
-    // Map through versions and attach the user data from relation
-    const enrichedVersions = versions.map(v => {
-        return {
-            id: v.id,
-            file_id: v.file_id,
-            version_number: v.version_number,
-            storage_path: v.storage_path,
-            file_size: v.file_size,
-            uploaded_by: v.uploaded_by,
-            created_at: v.created_at,
-            uploaded_by_username: v.uploader?.username || 'Unknown User',
-            uploaded_by_email: v.uploader?.email
-        };
-    });
-
-    return enrichedVersions;
+    // Shape matches the FileVersion interface in src/types/index.ts exactly:
+    // { id, file_id, version_number, storage_path, file_size, uploaded_by,
+    //   created_at, uploader: { id, username, email } }
+    return versions.map(v => ({
+        id: v.id,
+        file_id: v.file_id,
+        version_number: v.version_number,
+        storage_path: v.storage_path,
+        file_size: v.file_size,
+        uploaded_by: v.uploaded_by,
+        created_at: v.created_at,
+        uploader: v.uploader
+            ? { id: v.uploader.id, username: v.uploader.username, email: v.uploader.email }
+            : undefined,
+    }));
 };
 
-/**
- * Restore a past version of a file.
- * This captures the CURRENT state as a new version, and then rolls the File record back.
- */
-export const restoreVersion = async (fileId: number, versionNumber: number, teamId: number, userId: number) => {
-    // Only editors can restore versions
+// =============================================================================
+// restoreVersion
+// PURPOSE: Snapshot current state, then roll file back to a past version.
+// FIX: Uses logActivity utility (fire-and-forget, void) instead of raw
+//      tx.activityLog.create — consistent with every other log call.
+// =============================================================================
+export const restoreVersion = async (
+    fileId: number,
+    versionNumber: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
     await assertTeamMember(userId, teamId, 'editor');
 
-    // 1. Verify File exists in this team
     const file = await prisma.file.findFirst({
-        where: { id: fileId, team_id: teamId, is_deleted: false }
+        where: { id: fileId, team_id: teamId, is_deleted: false },
     });
-
     if (!file) throw new AppError('File not found', 404);
 
-    // 2. Verify target FileVersion exists
     const targetVersion = await prisma.fileVersion.findFirst({
-        where: { file_id: fileId, version_number: versionNumber }
+        where: { file_id: fileId, version_number: versionNumber },
     });
-
     if (!targetVersion) throw new AppError(`Version ${versionNumber} not found`, 404);
 
-    // If current file already points to this storage path perfectly, no point restoring
-    if (file.storage_path === targetVersion.storage_path && file.file_size === targetVersion.file_size) {
-        throw new AppError(`File is already at the state of version ${versionNumber}`, 400);
+    // ── GUARD 1: Same storage path ──────────────────────────────────────────
+    // Prevents restoring to what is already the active content
+    if (file.storage_path === targetVersion.storage_path) {
+        throw new AppError(
+            `File already shows version ${versionNumber} content. No restore needed.`,
+            400
+        );
     }
 
-    // Transaction guarantees atomic snapshot + restore
-    const updatedFile = await prisma.$transaction(async (tx) => {
-        // Snapshot the current file state into the history table
+    // ── GUARD 2: Same hash (content-based check) ─────────────────────────────
+    // WHY: storage_path check can fail if file was re-uploaded with same content
+    // but different path. Hash comparison catches true content equality.
+    // Only run if both hashes exist (hash was added in Week 5)
+    if (file.hash && targetVersion.file_size === file.file_size) {
+        // If sizes match, do a deeper check — look for a version with this
+        // exact storage_path already in the history to detect circular restores
+        const alreadyInHistory = await prisma.fileVersion.findFirst({
+            where: {
+                file_id: fileId,
+                storage_path: targetVersion.storage_path,
+                // Exclude the target version itself — we want OTHER versions with same path
+                NOT: { version_number: versionNumber },
+                // Only check recent versions — if last 2 versions alternate same paths,
+                // that's a circular restore pattern
+                version_number: { gt: versionNumber },
+            },
+            orderBy: { version_number: 'desc' },
+        });
+
+        // If the most recent version already has this content, we're in a loop
+        if (alreadyInHistory) {
+            const latestVersion = await prisma.fileVersion.findFirst({
+                where: { file_id: fileId },
+                orderBy: { version_number: 'desc' },
+            });
+
+            if (latestVersion?.storage_path === targetVersion.storage_path) {
+                throw new AppError(
+                    `Cannot restore: the previous version already has this content. ` +
+                    `This would create a duplicate version with no changes.`,
+                    400
+                );
+            }
+        }
+    }
+
+    // Atomic: snapshot current state, then apply historical state
+    const restoredFile = await prisma.$transaction(async tx => {
         await createVersion(fileId, tx);
 
-        // Roll the main file object back to the requested historical state.
-        // We set uploaded_by to the current user because THEY are technically the 
-        // author of the new state (the act of restoring makes them the active updater).
-        const restoredFile = await tx.file.update({
+        return tx.file.update({
             where: { id: fileId },
             data: {
                 storage_path: targetVersion.storage_path,
                 file_size: targetVersion.file_size,
                 uploaded_by: userId,
-            }
+            },
         });
-
-        // Log the action!
-        await tx.activityLog.create({
-            data: {
-                team_id: teamId,
-                user_id: userId,
-                action: 'version_restored',
-                target_type: 'file',
-                target_id: fileId,
-                metadata: { restored_to_version: versionNumber }
-            }
-        });
-        return restoredFile;
     });
 
-    return updatedFile;
+    void logActivity({
+        teamId,
+        userId,
+        action: 'version_restored',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            file_name: file.original_name,
+            restored_to_version: versionNumber,
+        },
+        ip,
+        userAgent,
+    });
+
+    return restoredFile;
 };

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { listDeletedFiles, restoreFile, listDeletedFolders, restoreFolder, getDeletedFolderContents, hardDeleteFile, hardDeleteFolder, emptyRecycleBin, getUnifiedRecycleBin } from '../services/recycleBin.service';
 import { AppError } from '../utils/teamGuard';
+import { logActivity } from '../utils/activityLogger';
 
 /**
  * GET /api/teams/:teamId/recycle-bin/all
@@ -72,9 +73,31 @@ export const restoreFileHandler = async (req: Request, res: Response): Promise<v
             res.status(400).json({ error: 'Invalid ID parameters' });
             return;
         }
+        // In any controller that passes ip/userAgent to a service:
 
-        const restoredFile = await restoreFile(fileId, teamId, userId);
-        res.status(200).json({ message: 'File restored successfully', file: restoredFile });
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const file = await restoreFile(
+            fileId,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
+
+        res.status(200).json({ message: 'File restored successfully', file: file });
     } catch (error) {
         if (error instanceof AppError) {
             res.status(error.statusCode).json({ error: error.message });
@@ -155,8 +178,29 @@ export const restoreFolderHandler = async (req: Request, res: Response): Promise
             res.status(400).json({ error: 'Invalid ID parameters' });
             return;
         }
+        // In any controller that passes ip/userAgent to a service:
 
-        const result = await restoreFolder(folderId, teamId, userId);
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const result = await restoreFolder(
+            folderId,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
         res.status(200).json(result);
     } catch (error) {
         if (error instanceof AppError) {

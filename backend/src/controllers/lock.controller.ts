@@ -174,13 +174,17 @@ export async function releaseLock(req: Request, res: Response): Promise<void> {
 
 
 
+    const { ip, userAgent } = extractRequestMeta(req);
+
     try {
         await assertTeamMember(userId, teamId);
         const result = await LockService.releaseLock(
             fileId,
             lockToken,
             userId,
-            teamId
+            teamId,
+            ip,
+            userAgent
         );
 
         res.status(200).json({

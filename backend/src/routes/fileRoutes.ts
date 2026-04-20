@@ -30,6 +30,8 @@ import {
     downloadFileHandler,
     softDeleteFileHandler,
     listFilesHandler,
+    renameFileHandler,     // ← NEW
+    previewFileHandler,    // ← NEW
 } from "../controllers/file.controller";
 
 import { moveFileHandler } from '../controllers/folderController';
@@ -76,14 +78,18 @@ router.post(
 // :id is the team ID — parsed inside the controller.
 // No multer needed — this is a standard JSON response route.
 // ---------------------------------------------------------------------------
+router.get('/teams/:id/files', authenticate, listFilesHandler);
+// ---------------------------------------------------------------------------
+// GET /api/files/:id/preview
+// ---------------------------------------------------------------------------
+// Native browser previews (images, pdfs) and HTML renders (docx, xlsx).
+// ---------------------------------------------------------------------------
 router.get(
-    "/teams/:id/files",
+    "/:id/preview",
     authenticate,
-    getTeamFilesHandler
+    previewFileHandler
 );
 
-
-router.get('/teams/:id/files', authenticate, listFilesHandler);
 // ---------------------------------------------------------------------------
 // GET /api/files/:id
 // ---------------------------------------------------------------------------
@@ -128,6 +134,7 @@ router.delete(
 // Add this route — PATCH a file to move it to a different folder
 
 router.patch('/:id', authenticate, moveFileHandler);
+router.patch('/:id/rename', authenticate, renameFileHandler);  // rename display name
 router.post('/:id/share', authenticate, createFileLinkHandler);
 
 export default router;

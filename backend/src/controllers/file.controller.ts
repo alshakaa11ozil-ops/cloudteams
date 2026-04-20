@@ -28,6 +28,8 @@ import {
     FileNotFoundError,
     ForbiddenError,
     listFiles,
+    renameFile,        // ← NEW: Week 12 rename feature
+    getFilePreview,
 } from "../services/file.service";
 import multer from "multer"; // imported for MulterError instanceof check.
 
@@ -83,7 +85,22 @@ export const uploadFileHandler = async (
         const folderId = req.body.folderId
             ? parseInt(req.body.folderId, 10)
             : undefined;
+        // In any controller that passes ip/userAgent to a service:
 
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
         // Fallback for mime_type: multer fills this from the request Content-Type.
         // If the browser sends an empty string, we default to "application/octet-stream"
         // which is the generic "unknown binary" MIME type — safe and honest.
@@ -97,7 +114,9 @@ export const uploadFileHandler = async (
         const { file, isDuplicate } = await uploadFile(
             multerFile,
             teamId,
-            req.user!.userId, // userId from JWT — never .id, always .userId
+            req.user!.userId,
+            ip,
+            userAgent,
             folderId
         );
 
@@ -348,6 +367,7 @@ export async function listFilesHandler(req: Request, res: Response) {
 export const softDeleteFileHandler = async (
     req: Request,
     res: Response
+
 ): Promise<void> => {
     try {
         const fileId = parseInt(req.params.id as string, 10);
@@ -355,8 +375,22 @@ export const softDeleteFileHandler = async (
             res.status(400).json({ error: "Invalid file ID" });
             return;
         }
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
 
-        await softDeleteFile(fileId, req.user!.userId);
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        await softDeleteFile(
+            fileId,
+            req.user!.userId,
+            ip,
+            userAgent
+        );
 
         res.status(200).json({
             message: "File deleted. It can be recovered from the recycle bin for 30 days.",
@@ -373,6 +407,138 @@ export const softDeleteFileHandler = async (
         }
 
         console.error("[softDeleteFileHandler] Unexpected error:", err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+// ---------------------------------------------------------------------------
+// CONTROLLER 6: renameFileHandler
+// ---------------------------------------------------------------------------
+// PURPOSE: Update the display name of a file (original_name field).
+//          The actual storage filename on disk is never changed.
+//
+// ROUTE:  PATCH /api/files/:id/rename
+// BODY:   { newName: string, teamId: number }
+//
+// HTTP RESPONSES:
+//   200 — { message, file } — file with updated original_name
+//   400 — missing newName or teamId
+//   403 — user is viewer (no write permission)
+//   404 — file not found or belongs to different team
+// ---------------------------------------------------------------------------
+export const renameFileHandler = async (
+    req: Request,
+    res: Response
+): Promise<void> => {
+    try {
+        const fileId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.body.teamId, 10);
+        const { newName } = req.body;
+        // In any controller that passes ip/userAgent to a service:
+
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+
+        if (isNaN(fileId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'Invalid fileId or teamId' });
+            return;
+        }
+        if (!newName || typeof newName !== 'string' || !newName.trim()) {
+            res.status(400).json({ error: 'newName is required' });
+            return;
+        }
+
+        const file = await renameFile(
+            fileId,
+            newName,
+            teamId,
+            req.user!.userId,
+            ip,
+            userAgent
+        );
+
+        res.status(200).json({ message: 'File renamed successfully', file });
+    } catch (err: any) {
+        if (err.statusCode) {
+            res.status(err.statusCode).json({ error: err.message });
+            return;
+        }
+        if (err instanceof ForbiddenError) {
+            res.status(403).json({ error: err.message });
+            return;
+        }
+        if (err instanceof FileNotFoundError) {
+            res.status(404).json({ error: err.message });
+            return;
+        }
+        console.error('[renameFileHandler] Unexpected error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// ---------------------------------------------------------------------------
+// CONTROLLER 7: previewFileHandler
+// ---------------------------------------------------------------------------
+// PURPOSE: Stream image/PDF directly to browser (inline) or return HTML
+//          for document previews.
+//
+// ROUTE:  GET /api/files/:id/preview?teamId=X
+// ---------------------------------------------------------------------------
+export const previewFileHandler = async (
+    req: Request,
+    res: Response
+): Promise<void> => {
+    try {
+        const fileId = parseInt(req.params.id as string, 10);
+        // Important: req.query.teamId lets us verify access within a team context
+        const teamId = parseInt(req.query.teamId as string, 10);
+
+        if (isNaN(fileId) || isNaN(teamId)) {
+            res.status(400).json({ error: "Invalid file ID or team ID parameter missing" });
+            return;
+        }
+
+        const previewData = await getFilePreview(fileId, req.user!.userId, teamId);
+
+        // Native streaming (PDFs / Images)
+        if (previewData.streamable && previewData.storagePath) {
+            res.setHeader('Content-Type', previewData.mimeType || 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'inline');
+            const fs = require('fs');
+            const stream = fs.createReadStream(previewData.storagePath);
+            stream.pipe(res);
+            return;
+        }
+
+        // Converted JSON blocks (HTML representation) or fallback false
+        res.status(200).json(previewData);
+    } catch (err: any) {
+        if (err.statusCode) {
+            res.status(err.statusCode).json({ error: err.message });
+            return;
+        }
+        if (err instanceof FileNotFoundError) {
+            res.status(404).json({ error: err.message });
+            return;
+        }
+        if (err instanceof ForbiddenError) {
+            res.status(403).json({ error: err.message });
+            return;
+        }
+
+        console.error("[previewFileHandler] Unexpected error:", err);
         res.status(500).json({ error: "Internal server error" });
     }
 };

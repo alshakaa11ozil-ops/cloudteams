@@ -36,10 +36,14 @@ export const addComment = async (fileId: number, teamId: number, userId: number,
     void logActivity({
         teamId,
         userId,
-        action: 'comment_added',
+        action: 'comment_created',
         targetType: 'comment',
         targetId: comment.id,
-        metadata: { fileId, preview: content.slice(0, 100) },
+        metadata: { 
+            fileId, 
+            file_name: file.original_name, // ← Added for feed visibility
+            preview: content.slice(0, 100) 
+        },
     });
     // 4. Parse @Mentions out of the text content
     // content.matchAll returns an iterable of all regex matches

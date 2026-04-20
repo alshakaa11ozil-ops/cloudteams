@@ -8,6 +8,7 @@ import {
     getTeamFoldersHandler,
     renameFolderHandler,
     deleteFolderHandler,
+    moveFolderHandler, // NEW
 } from '../controllers/folderController';
 
 const router = Router();
@@ -19,5 +20,6 @@ const router = Router();
 
 router.post('/', authenticate, createFolderHandler);
 router.patch('/:id', authenticate, renameFolderHandler);
+router.patch('/:id/move', authenticate, moveFolderHandler); // NEW
 router.delete('/:id', authenticate, deleteFolderHandler);
 export default router;

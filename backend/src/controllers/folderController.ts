@@ -7,9 +7,10 @@ import {
     renameFolder,
     deleteFolder,
     moveFile,
-
+    moveFolder, // ← NEW
 } from '../services/folder.service';
 import { AppError } from '../utils/teamGuard';
+import { logActivity } from '../utils/activityLogger';
 // ─────────────────────────────────────────────
 // HELPER: handleError
 // PURPOSE: Central error handler for all folder controllers.
@@ -45,13 +46,37 @@ export async function createFolderHandler(req: Request, res: Response) {
         const parentFolderId = req.body.parentFolderId
             ? parseInt(req.body.parentFolderId, 10)
             : undefined;
+        // In any controller that passes ip/userAgent to a service:
+
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
 
         if (!name || isNaN(teamId)) {
             res.status(400).json({ error: 'name and teamId are required' });
             return;
         }
 
-        const folder = await createFolder(name, teamId, userId, parentFolderId);
+        const folder = await createFolder(
+            name,
+            teamId,
+            userId,
+            ip,
+            userAgent,
+            parentFolderId
+        );
+
         res.status(201).json({ folder });
     } catch (error) {
         handleError(res, error);
@@ -94,8 +119,30 @@ export async function renameFolderHandler(req: Request, res: Response) {
             res.status(400).json({ error: 'name and teamId are required' });
             return;
         }
+        // In any controller that passes ip/userAgent to a service:
 
-        const folder = await renameFolder(folderId, name, teamId, userId);
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const folder = await renameFolder(
+            folderId,
+            name,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
         res.status(200).json({ folder });
     } catch (error) {
         handleError(res, error);
@@ -130,8 +177,30 @@ export async function deleteFolderHandler(req: Request, res: Response) {
         const recursive = allowed.includes(rawRecursive as typeof allowed[number])
             ? (rawRecursive as 'false' | 'files' | 'true')
             : 'false'; // default to safest mode if param is missing or invalid
+        // In any controller that passes ip/userAgent to a service:
 
-        const result = await deleteFolder(folderId, teamId, userId, recursive);
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const result = await deleteFolder(
+            folderId,
+            teamId,
+            userId,
+            ip,
+            userAgent,
+            recursive
+        );
 
         // Build a human-readable message based on what actually happened
         let message = 'Folder deleted successfully';
@@ -166,9 +235,83 @@ export async function moveFileHandler(req: Request, res: Response) {
             req.body.folderId === null || req.body.folderId === 'null'
                 ? null
                 : parseInt(req.body.folderId, 10);
+        // In any controller that passes ip/userAgent to a service:
 
-        const file = await moveFile(fileId, targetFolderId, teamId, userId);
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const file = await moveFile(
+            fileId,
+            targetFolderId,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
         res.status(200).json({ file });
+    } catch (error) {
+        handleError(res, error);
+    }
+}
+
+// ─────────────────────────────────────────────
+// CONTROLLER: moveFolderHandler
+// Route: PATCH /api/folders/:id/move
+// Body: { teamId, targetFolderId }  — targetFolderId can be null to move to root
+// ─────────────────────────────────────────────
+export async function moveFolderHandler(req: Request, res: Response) {
+    try {
+        const userId = req.user!.userId;
+        const folderId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.body.teamId, 10);
+        // In any controller that passes ip/userAgent to a service:
+
+        // WHY x-forwarded-for: when Express sits behind a reverse proxy (Nginx, 
+        // Heroku router, Railway), the real client IP is in this header.
+        // req.ip alone returns the proxy's address, not the user's address.
+        // We fall through to req.ip as the final fallback for direct connections.
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        // WHY split(',')[0]: x-forwarded-for can contain multiple IPs if the
+        // request passed through multiple proxies: "clientIP, proxy1, proxy2"
+        // We only want the first one — that's the original client.
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+
+        if (isNaN(folderId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'folderId from params and teamId from body are required' });
+            return;
+        }
+
+        // targetFolderId can be null (move to root) or a number (move to folder)
+        const targetFolderId =
+            req.body.targetFolderId === null || req.body.targetFolderId === 'null'
+                ? null
+                : parseInt(req.body.targetFolderId, 10);
+
+        const folder = await moveFolder(
+            folderId,
+            targetFolderId,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
+        res.status(200).json({ folder });
     } catch (error) {
         handleError(res, error);
     }

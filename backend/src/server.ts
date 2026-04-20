@@ -101,6 +101,16 @@ app.use((req, res) => {
   });
 });
 
+// Global error handler — catches errors thrown by middleware (e.g. multer)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({ error: 'File too large. Maximum size is 50MB.' });
+  } else {
+    console.error('[Global Error]', err);
+    res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
 // ============================================================
 // startServer
 // PURPOSE:  Verify DB is reachable, create the HTTP server,

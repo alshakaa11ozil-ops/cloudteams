@@ -13,6 +13,7 @@ import {
     regenerateInviteCodeHandler,
     joinTeamHandler,
 } from '../controllers/inviteCode.controller'
+import versionRouter from './versionRoutes';
 
 const router = Router();
 // Add import at the top
@@ -37,4 +38,9 @@ router.use('/:id/activity', activityRouter);
 // Analytics dashboard: GET /api/teams/:id/analytics
 router.use('/:id/analytics', analyticsRouter);
 router.post('/:id/share', authenticate, createFileLinkHandler);
+// ADD this line before export default router:
+// Mounts version routes at /api/teams/:teamId/files/:fileId/versions
+// WHY use here not in fileRoutes: version routes are scoped to a team context
+// (assertTeamMember needs teamId), so they belong under the /teams namespace
+router.use('/', versionRouter);
 export default router;

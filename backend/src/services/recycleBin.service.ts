@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity } from '../utils/activityLogger';
+
 
 /**
  * List all soft-deleted files for a team.
@@ -55,7 +57,13 @@ export const getUnifiedRecycleBin = async (teamId: number, userId: number) => {
  * @param teamId Team ID the file belongs to
  * @param userId Requesting user ID
  */
-export const restoreFile = async (fileId: number, teamId: number, userId: number) => {
+export const restoreFile = async (
+    fileId: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
     // Only editors/admins can restore a file
     await assertTeamMember(userId, teamId, 'editor');
 
@@ -84,7 +92,25 @@ export const restoreFile = async (fileId: number, teamId: number, userId: number
         },
     });
 
+    // Audit: fire-and-forget — log that this user restored the file from the bin.
+    // metadata includes whether it landed back in its original folder or was orphaned to root.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_restored',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            file_name: file.original_name,
+            restoredToFolderId: finalFolderId,            // null = root level
+            orphanedToRoot: finalFolderId !== file.folder_id, // true if parent was deleted
+        },
+        ip,
+        userAgent,
+    });
+
     return updatedFile;
+
 };
 
 // ─────────────────────────────────────────────
@@ -179,7 +205,13 @@ export const getDeletedFolderContents = async (folderId: number, teamId: number,
  * @param teamId Team ID the folder belongs to
  * @param userId Requesting user ID
  */
-export const restoreFolder = async (folderId: number, teamId: number, userId: number) => {
+export const restoreFolder = async (
+    folderId: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
     // Only editors/admins can restore a folder
     await assertTeamMember(userId, teamId, 'editor');
 
@@ -231,11 +263,32 @@ export const restoreFolder = async (folderId: number, teamId: number, userId: nu
         })
     ]);
 
-    return {
+    const result = {
         message: 'Folder and contents restored successfully',
         restoredFolders: updatedFolders.count,
         restoredFiles: updatedFiles.count
     };
+
+    // Audit: fire-and-forget — records how many folders/files were recovered.
+    // 'folder_restored' is distinct from 'file_restored' so the feed can group them.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_restored',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: {
+            folder_name: folder.name,
+            restoredFolders: updatedFolders.count,
+            restoredFiles: updatedFiles.count,
+            orphanedToRoot: finalParentFolderId !== folder.parent_folder_id, // reparented?
+        },
+        ip,
+        userAgent,
+    });
+
+    return result;
+
 };
 
 // ─────────────────────────────────────────────
@@ -284,7 +337,30 @@ export const hardDeleteFile = async (fileId: number, teamId: number, userId: num
     // Only admins can permanently delete
     await assertTeamMember(userId, teamId, 'admin');
 
+    // Fetch the file metadata before it is purged from the DB
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: true },
+        select: { original_name: true }
+    });
+
+    if (!file) {
+        throw new AppError('File not found in recycle bin', 404);
+    }
+
     await performHardDeleteFile(fileId, teamId);
+
+    // Audit: permanent deletion is admin-only so we log it for full accountability.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_deleted',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            file_name: file.original_name,
+            permanent: true
+        },
+    });
 
     return { message: 'File permanently deleted' };
 };
@@ -331,6 +407,21 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
         where: { id: { in: folderIdsToDelete } }
     });
 
+    // Audit log
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_deleted',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: {
+            folder_name: folder.name,
+            permanent: true,
+            deletedFolders: deletedFolders.count,
+            deletedFiles: filesToDelete.length
+        },
+    });
+
     return {
         message: 'Folder hierarchy permanently deleted',
         deletedFolders: deletedFolders.count,
@@ -358,6 +449,21 @@ export const emptyRecycleBin = async (teamId: number, userId: number) => {
     // Now permanently delete ALL deleted folders for the team
     const deletedFolders = await prisma.folder.deleteMany({
         where: { team_id: teamId, is_deleted: true }
+    });
+
+    // Audit log
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_deleted',
+        targetType: 'file',
+        targetId: 0, // 0 for bulk action
+        metadata: {
+            action_name: 'Empty Recycle Bin',
+            deletedFiles: allDeletedFiles.length,
+            deletedFolders: deletedFolders.count,
+            permanent: true
+        },
     });
 
     return {

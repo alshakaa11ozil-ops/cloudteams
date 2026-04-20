@@ -23,11 +23,13 @@
     "@types/pg": "^8.18.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
+    "dompurify": "^3.4.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
+    "mammoth": "^1.12.0",
     "multer": "^2.1.1",
     "node-cron": "^4.2.1",
     "pg": "^8.20.0",
@@ -37,11 +39,13 @@
     "sequelize": "^6.37.8",
     "socket.io": "^4.8.3",
     "speakeasy": "^2.0.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.19",
+    "@types/dompurify": "^3.0.5",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
@@ -50,6 +54,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/speakeasy": "^2.0.10",
     "@types/uuid": "^10.0.0",
+    "@types/xlsx": "^0.0.35",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
