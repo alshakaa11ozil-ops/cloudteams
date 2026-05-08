@@ -17,6 +17,7 @@ import prisma from '../config/database';
 import { v4 as uuidv4 } from 'uuid';  // generates cryptographically random UUIDs
 import { emitToTeam } from '../socket';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 // ─── Constants ───────────────────────────────────────────────
 // How long a lease lasts before it auto-expires.
 // 30 minutes is long enough for real editing sessions but short
@@ -142,15 +143,15 @@ export async function acquireLock(
         action: 'lock_acquired',
         targetType: 'file',
         targetId: fileId,
-        metadata: { 
-            lockToken, 
-            lockExpiresAt, 
-            ip, 
+        metadata: {
+            lockToken,
+            lockExpiresAt,
+            ip,
             userAgent,
             file_name: file.original_name // ← Fixes 'item #15' issue
         },
     });
-    emitToTeam(teamId, 'file.locked', {
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_LOCKED, {
         fileId,
         lockedBy: userId,       // frontend will resolve name from its own state
         lockExpiresAt: lockExpiresAt.toISOString(),
@@ -260,13 +261,13 @@ export async function releaseLock(
         action: 'lock_released',
         targetType: 'file',
         targetId: fileId,
-        metadata: { 
-            ip, 
+        metadata: {
+            ip,
             userAgent,
             file_name: file?.original_name || 'unknown'
         },
     });
-    emitToTeam(teamId, 'file.unlocked', { fileId });
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_UNLOCKED, { fileId, unlockedBy: userId });
     return { success: true };
 }
 
@@ -398,14 +399,14 @@ export async function forceUnlock(
         action: 'lock_force_released',
         targetType: 'file',
         targetId: fileId,
-        metadata: { 
-            ip, 
-            userAgent, 
+        metadata: {
+            ip,
+            userAgent,
             performedBy: adminUserId,
             file_name: file?.original_name || 'unknown'
         },
     });
     // Admin broke the lock — notify team so UI updates.
-    emitToTeam(teamId, 'file.unlocked', { fileId, forcedBy: adminUserId });
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_UNLOCKED, { fileId, forcedBy: adminUserId, unlockedBy: adminUserId });
     return { success: true };
 }

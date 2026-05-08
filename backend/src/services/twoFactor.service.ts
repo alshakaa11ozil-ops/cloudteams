@@ -118,7 +118,7 @@ export const generateSetupData = async (
 
   // Don't let users generate a new secret if 2FA is already enabled.
   // They must disable it first, then re-enable.
-  if (user.two_factor_secret) {
+  if (user.two_factor_confirmed) {
     throw new TwoFactorAlreadyEnabledError();
   }
 
@@ -174,21 +174,12 @@ export const generateSetupData = async (
 // ===========================================================================
 export const verifySetupAndEnable = async (
   userId: number,
+  secret: string,
   code: string
 ): Promise<{ token: string; user: any }> => {
-  // Step 1: Fetch the user to get their saved (but unconfirmed) secret
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, email: true, two_factor_secret: true },
-  });
-
-  if (!user || !user.two_factor_secret) {
-    throw new TwoFactorNotEnabledError("No 2FA setup in progress.");
-  }
-
-  // Step 2: Verify the code against the stored secret
+  // Step 1: Verify the code against the provided secret
   const isValid = speakeasy.totp.verify({
-    secret: user.two_factor_secret,
+    secret: secret,
     encoding: "base32",
     token: code,
     window: 1, // ±30 seconds
@@ -200,22 +191,36 @@ export const verifySetupAndEnable = async (
     );
   }
 
-  // Step 3: Code is valid → Mark 2FA as confirmed
+  // Step 2: Code is valid → Save secret and mark 2FA as confirmed
   const updatedUser = await prisma.user.update({
     where: { id: userId },
-    data: { two_factor_confirmed: true },
+    data: { 
+        two_factor_secret: secret,
+        two_factor_confirmed: true,
+        last_login: new Date()
+    },
+    select: {
+      id: true,
+      username: true,
+      email: true,
+      full_name: true,
+      job_title: true,
+      avatar_color: true,
+      created_at: true,
+      two_factor_confirmed: true,
+    }
   });
 
-  // Step 4: Issue the REAL JWT token (just like a full login)
+  // Step 3: Issue the REAL JWT token (just like a full login)
   const token = signToken({ userId: updatedUser.id, email: updatedUser.email });
 
   return {
     token,
     user: {
-      id: updatedUser.id,
+      ...updatedUser,
       name: updatedUser.username,
-      email: updatedUser.email,
       createdAt: updatedUser.created_at,
+      twoFactorEnabled: updatedUser.two_factor_confirmed,
     },
   };
 };
@@ -281,6 +286,9 @@ export const completeTwoFactorLogin = async (
       id: true,
       username: true,
       email: true,
+      full_name: true,
+      job_title: true,
+      avatar_color: true,
       two_factor_secret: true,
       two_factor_confirmed: true,
       created_at: true,
@@ -314,13 +322,19 @@ export const completeTwoFactorLogin = async (
   // This token has no purpose field — it's a full access token
   const token = signToken({ userId: user.id, email: user.email });
 
+  // Update last_login timestamp
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { last_login: new Date() }
+  });
+
   return {
     token,
     user: {
-      id: user.id,
+      ...user,
       name: user.username,
-      email: user.email,
       createdAt: user.created_at,
+      twoFactorEnabled: user.two_factor_confirmed,
     },
   };
 };

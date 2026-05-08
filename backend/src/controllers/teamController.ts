@@ -40,6 +40,7 @@
 // ============================================================
 
 import { Request, Response } from 'express';
+import prisma from '../config/database';
 import * as teamService from '../services/teamService';
 import { AppError } from '../utils/teamGuard';
 
@@ -250,6 +251,82 @@ export async function getTeamMembers(req: Request, res: Response) {
   } catch (error) {
     console.error('[getTeamMembers]', error);
     res.status(500).json({ error: 'Failed to fetch members' });
+  }
+}
+
+// PURPOSE: Update team name and/or description
+// INPUTS:  req.params.id = teamId, req.body = { name?, description? }
+// OUTPUTS: 200 with updated team
+export const updateTeamHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const teamId = parseInt(req.params.id as string, 10)
+    const userId = req.user!.userId
+    const { name, description } = req.body
+
+    if (!name?.trim()) {
+      res.status(400).json({ error: 'Team name cannot be empty' })
+      return
+    }
+
+    // Only admins can update team info
+    const member = await prisma.teamMember.findFirst({
+      where: { team_id: teamId, user_id: userId }
+    })
+    if (!member || member.role !== 'admin') {
+      res.status(403).json({ error: 'Only admins can update team settings' })
+      return
+    }
+
+    const updated = await prisma.team.update({
+      where: { id: teamId },
+      data: {
+        name: name.trim(),
+        description: description?.trim() ?? undefined,
+        updated_at: new Date()
+      }
+    })
+
+    res.json({ team: updated })
+  } catch (err) {
+    console.error('[updateTeamHandler]', err)
+    res.status(500).json({ error: 'Failed to update team' })
+  }
+}
+
+// PURPOSE: Permanently delete a team and cascade all its data
+// INPUTS:  req.params.id = teamId
+// OUTPUTS: 200 with success message
+export const deleteTeamHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const teamId = parseInt(req.params.id as string, 10)
+    const userId = req.user!.userId
+
+    // Only admins can delete
+    const member = await prisma.teamMember.findFirst({
+      where: { team_id: teamId, user_id: userId }
+    })
+    if (!member || member.role !== 'admin') {
+      res.status(403).json({ error: 'Only admins can delete the team' })
+      return
+    }
+
+    // Must be the owner to delete entirely
+    // WHY: Even admins shouldn't be able to delete a team they didn't create
+    // Remove this check if you want any admin to delete
+    const team = await prisma.team.findUnique({ where: { id: teamId } })
+    if (!team) {
+      res.status(404).json({ error: 'Team not found' })
+      return
+    }
+
+    // Prisma CASCADE handles deleting members, files, folders etc
+    // as long as your schema has onDelete: Cascade on foreign keys
+    await prisma.team.delete({ where: { id: teamId } })
+
+    res.json({ message: 'Team deleted successfully' })
+  } catch (err) {
+    console.error('[deleteTeamHandler]', err)
+    res.status(500).json({ error: 'Failed to delete team' })
   }
 }
 

@@ -6,7 +6,6 @@ import announcementRoutes from './announcementRoutes';
 import { getTeamFoldersHandler } from '../controllers/folderController';
 import activityRouter from './activityRoutes';
 import analyticsRouter from './analyticsRoutes';
-import { createFileLinkHandler } from '../controllers/share.controller';
 // Add this import at the top of teamRoutes.ts//
 import {
     getInviteCodeHandler,
@@ -14,6 +13,9 @@ import {
     joinTeamHandler,
 } from '../controllers/inviteCode.controller'
 import versionRouter from './versionRoutes';
+import { summarizeFileHandler } from '../controllers/aiSummary.controller'
+import { generateDigestHandler } from '../controllers/digest.controller';
+import { updateTeamHandler, deleteTeamHandler } from '../controllers/teamController'
 
 const router = Router();
 // Add import at the top
@@ -37,10 +39,19 @@ router.get('/:id/folders', authenticate, getTeamFoldersHandler);// Add this rout
 router.use('/:id/activity', activityRouter);
 // Analytics dashboard: GET /api/teams/:id/analytics
 router.use('/:id/analytics', analyticsRouter);
-router.post('/:id/share', authenticate, createFileLinkHandler);
-// ADD this line before export default router:
+
+// Add this line before export default router:
 // Mounts version routes at /api/teams/:teamId/files/:fileId/versions
 // WHY use here not in fileRoutes: version routes are scoped to a team context
 // (assertTeamMember needs teamId), so they belong under the /teams namespace
 router.use('/', versionRouter);
+router.patch('/:id', authenticate, updateTeamHandler)
+router.delete('/:id', authenticate, deleteTeamHandler)
+
+// AI Digest route
+router.post('/:id/digest', authenticate, requireRole('viewer'), generateDigestHandler);
+
+// AI Summary route — Week 14
+router.post('/:id/files/:fileId/summarize', authenticate, requireRole('viewer'), summarizeFileHandler);
+
 export default router;

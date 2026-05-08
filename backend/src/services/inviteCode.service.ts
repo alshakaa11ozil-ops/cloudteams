@@ -8,6 +8,9 @@
 
 import prisma from '../config/database'
 import crypto from 'crypto'
+import { logActivity } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // ── generateInviteCode ────────────────────────────────────────────────────
 //
@@ -142,16 +145,22 @@ export async function joinTeamByCode(code: string, userId: number) {
     })
 
     // Log the activity
-    await prisma.activityLog.create({
-        data: {
-            team_id: team.id,
-            user_id: userId,
-            action: 'member_joined',
-            target_type: 'team',
-            target_id: team.id,
-            metadata: { method: 'invite_code' },
-        },
-    })
+    void logActivity({
+        teamId: team.id,
+        userId: userId,
+        action: 'member_joined',
+        targetType: 'team',
+        targetId: team.id,
+        metadata: { method: 'invite_code' },
+    });
+
+    // Real-time notification via helper
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
+    emitToTeam(team.id, SOCKET_EVENTS.MEMBER_JOINED, {
+        userId: userId,
+        username: user?.username || 'New Member',
+        role: 'editor'
+    });
 
     return team
 }

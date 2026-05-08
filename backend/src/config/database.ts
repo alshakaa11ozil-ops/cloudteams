@@ -45,4 +45,5 @@ export const testConnection = async (): Promise<void> => {
   }
 }
 
+
 export default prisma

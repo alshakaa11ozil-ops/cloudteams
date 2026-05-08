@@ -97,11 +97,10 @@ export const verifySetupHandler = async (
     res: Response
 ): Promise<void> => {
     try {
-        const { code } = req.body;
+        const { secret, code } = req.body;
 
-        // Only code is required now — secret is fetched from DB via service
-        if (!code) {
-            res.status(400).json({ error: "Code is required" });
+        if (!secret || !code) {
+            res.status(400).json({ error: "Secret and code are required" });
             return;
         }
 
@@ -111,7 +110,7 @@ export const verifySetupHandler = async (
             return;
         }
 
-        const result = await verifySetupAndEnable(req.user!.userId, code);
+        const result = await verifySetupAndEnable(req.user!.userId, secret, code);
 
         res.status(200).json({ 
             message: "Two-factor authentication enabled successfully. You are now logged in.",

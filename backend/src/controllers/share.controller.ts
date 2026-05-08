@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { createSharedLink, getLinkMetadata, getTeamContent, downloadSharedFile, revokeSharedLink } from '../services/share.service';
+import { createSharedLink, getLinkMetadata, getTeamContent, downloadSharedFile, revokeSharedLink, listFileSharedLinks } from '../services/share.service';
 import { AppError } from '../utils/teamGuard';
 
 // ===========================================================================
@@ -33,7 +33,7 @@ export const createFileLinkHandler = async (req: Request, res: Response): Promis
         const link = await createSharedLink(req.user!.userId, teamId, {
             fileId,
             password: password || undefined,
-            expiresInHours: expiresInHours ? parseInt(expiresInHours, 10) : undefined,
+            expiresInHours: expiresInHours !== undefined ? parseInt(String(expiresInHours), 10) : undefined,
             downloadLimit: downloadLimit ? parseInt(downloadLimit, 10) : undefined
         });
 
@@ -65,7 +65,7 @@ export const createTeamLinkHandler = async (req: Request, res: Response): Promis
         const link = await createSharedLink(req.user!.userId, teamId, {
             // No fileId → service treats this as a team share
             password: password || undefined,
-            expiresInHours: expiresInHours ? parseInt(expiresInHours, 10) : undefined,
+            expiresInHours: expiresInHours !== undefined ? parseInt(String(expiresInHours), 10) : undefined,
             downloadLimit: downloadLimit ? parseInt(downloadLimit, 10) : undefined
         });
 
@@ -76,6 +76,39 @@ export const createTeamLinkHandler = async (req: Request, res: Response): Promis
             return;
         }
         console.error('[createTeamLinkHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// PURPOSE: Create a share link for a SINGLE FOLDER
+// INPUTS:  req.params.id = folderId, req.body.teamId = teamId
+// OUTPUTS: 201 with the created SharedLink row
+export const createFolderLinkHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const folderId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.body.teamId as string, 10);
+
+        if (isNaN(folderId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid folderId and teamId are required' });
+            return;
+        }
+
+        const { password, expiresInHours, downloadLimit } = req.body;
+
+        const link = await createSharedLink(req.user!.userId, teamId, {
+            folderId,
+            password: password || undefined,
+            expiresInHours: expiresInHours !== undefined ? parseInt(String(expiresInHours), 10) : undefined,
+            downloadLimit: downloadLimit ? parseInt(downloadLimit, 10) : undefined
+        });
+
+        res.status(201).json({ message: 'Folder share link generated', link });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[createFolderLinkHandler]', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -165,6 +198,31 @@ export const revokeLinkHandler = async (req: Request, res: Response): Promise<vo
             res.status(error.statusCode).json({ error: error.message });
             return;
         }
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// PURPOSE: List all share links for a file
+// INPUTS:  req.params.id = fileId, req.query.teamId = teamId
+// OUTPUTS: 200 with array of SharedLink rows
+export const listFileLinksHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const fileId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.query.teamId as string, 10);
+
+        if (isNaN(fileId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid fileId and teamId are required' });
+            return;
+        }
+
+        const links = await listFileSharedLinks(req.user!.userId, teamId, fileId);
+        res.status(200).json({ links });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[listFileLinksHandler]', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };

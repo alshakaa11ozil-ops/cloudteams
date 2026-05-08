@@ -33,7 +33,11 @@ export interface AuthResult {
   user?: {
     id: number;
     name: string;
+    username: string;
     email: string;
+    full_name?: string | null;
+    job_title?: string | null;
+    avatar_color?: string | null;
     createdAt: Date;
   };
   requiresTwoFactor?: boolean;
@@ -115,7 +119,11 @@ export const registerUser = async (input: RegisterInput): Promise<AuthResult> =>
     user: {
       id: user.id,
       name: user.username,
+      username: user.username,
       email: user.email,
+      full_name: user.full_name,
+      job_title: user.job_title,
+      avatar_color: user.avatar_color,
       createdAt: user.created_at,
     },
     // Return QR code and secret so frontend can show setup screen
@@ -214,14 +222,17 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
   // ── Step 4: No 2FA — issue real JWT immediately (existing flow) ──
   const token = signToken({ userId: user.id, email: user.email });
 
+  // Update last_login timestamp
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { last_login: new Date() }
+  });
+
+  const fullUser = await getUserById(user.id)
+
   return {
     token,
-    user: {
-      id: user.id,
-      name: user.username,
-      email: user.email,
-      createdAt: user.created_at,
-    },
+    user: fullUser,
   };
 };
 
@@ -233,31 +244,36 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
 // INPUTS: userId (number) from the JWT payload
 // OUTPUTS: user object without password hash
 // ============================================================
-export const getUserById = async (userId: number) => {
+// In auth.service.ts — find getUserById and update the select:
 
+export async function getUserById(userId: number) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    // SELECT only safe fields — never return password_hash
     select: {
       id: true,
       username: true,
       email: true,
+      full_name: true,
+      job_title: true,
+      avatar_color: true,
       created_at: true,
-    },
-  });
+      // WHY INCLUDE THIS: Frontend needs to know if 2FA is active
+      // to show the correct UI state in UserSettings.
+      // We return a boolean — NEVER the secret itself.
+      two_factor_confirmed: true,
+    }
+  })
 
-  if (!user) {
-    throw new Error('USER_NOT_FOUND');
-  }
+  if (!user) throw new Error('USER_NOT_FOUND')
 
   return {
-    id: user.id,
+    ...user,
     name: user.username,
-    email: user.email,
     createdAt: user.created_at,
-  };
+    twoFactorEnabled: user.two_factor_confirmed ?? false,
 
-};
+  }
+}
 
 
 // ===========================================================================

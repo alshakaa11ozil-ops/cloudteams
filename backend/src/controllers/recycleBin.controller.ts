@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { listDeletedFiles, restoreFile, listDeletedFolders, restoreFolder, getDeletedFolderContents, hardDeleteFile, hardDeleteFolder, emptyRecycleBin, getUnifiedRecycleBin } from '../services/recycleBin.service';
+import { listDeletedFiles, restoreFile, listDeletedFolders, restoreFolder, getDeletedFolderContents, hardDeleteFile, hardDeleteFolder, emptyRecycleBin, getUnifiedRecycleBin, restoreDocument, hardDeleteDocument } from '../services/recycleBin.service';
 import { AppError } from '../utils/teamGuard';
 import { logActivity } from '../utils/activityLogger';
 
@@ -104,6 +104,45 @@ export const restoreFileHandler = async (req: Request, res: Response): Promise<v
         } else {
             console.error('restoreFileHandler Error:', error);
             res.status(500).json({ error: 'Internal server error restoring file' });
+        }
+    }
+};
+
+/**
+ * POST /api/teams/:teamId/recycle-bin/documents/:documentId/restore
+ */
+export const restoreDocumentHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const teamId = parseInt(req.params.teamId as string, 10);
+        const documentId = parseInt(req.params.documentId as string, 10);
+        const userId = req.user!.userId;
+
+        if (isNaN(teamId) || isNaN(documentId)) {
+            res.status(400).json({ error: 'Invalid ID parameters' });
+            return;
+        }
+
+        const ip =
+            (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+            req.ip ??
+            'unknown'
+
+        const userAgent = (req.headers['user-agent'] as string) ?? 'unknown'
+        const document = await restoreDocument(
+            documentId,
+            teamId,
+            userId,
+            ip,
+            userAgent
+        );
+
+        res.status(200).json({ message: 'Document restored successfully', document });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else {
+            console.error('restoreDocumentHandler Error:', error);
+            res.status(500).json({ error: 'Internal server error restoring document' });
         }
     }
 };
@@ -259,6 +298,32 @@ export const hardDeleteFileHandler = async (req: Request, res: Response): Promis
         } else {
             console.error('hardDeleteFileHandler Error:', error);
             res.status(500).json({ error: 'Internal server error permanently deleting file' });
+        }
+    }
+};
+
+/**
+ * DELETE /api/teams/:teamId/recycle-bin/documents/:documentId
+ */
+export const hardDeleteDocumentHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const teamId = parseInt(req.params.teamId as string, 10);
+        const documentId = parseInt(req.params.documentId as string, 10);
+        const userId = req.user!.userId;
+
+        if (isNaN(teamId) || isNaN(documentId)) {
+            res.status(400).json({ error: 'Invalid ID parameters' });
+            return;
+        }
+
+        const result = await hardDeleteDocument(documentId, teamId, userId);
+        res.status(200).json(result);
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else {
+            console.error('hardDeleteDocumentHandler Error:', error);
+            res.status(500).json({ error: 'Internal server error permanently deleting document' });
         }
     }
 };

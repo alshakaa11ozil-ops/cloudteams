@@ -3,6 +3,8 @@
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 // ─────────────────────────────────────────────
 // CUSTOM ERROR CLASS
 // PURPOSE: Lets controllers know WHAT went wrong and WHAT HTTP status to send.
@@ -150,6 +152,12 @@ export async function createFolder(
         ip,
         userAgent,
     })
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_CREATED, {
+        folder: folder as unknown as Record<string, unknown>,
+        createdBy: userId
+    });
+
     return folder;
 }
 
@@ -229,6 +237,14 @@ export async function renameFolder(
         ip,
         userAgent,
     });
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_RENAMED, {
+        folderId: folderId,
+        oldName: folder.name,
+        newName: newName,
+        renamedBy: userId
+    });
+
     return updated;
 }
 
@@ -329,6 +345,12 @@ export async function deleteFolder(
             metadata: { mode: recursive, folder_name: folder.name },
             ip,
             userAgent,
+        });
+
+        // Real-time notification via helper
+        emitToTeam(teamId, SOCKET_EVENTS.FOLDER_DELETED, {
+            folderId: folderId,
+            deletedBy: userId
         });
 
         return { deletedFolders: updatedFolders.count, deletedFiles: 0, orphanedFiles: 0 };
@@ -486,6 +508,14 @@ export async function moveFile(
         ip,
         userAgent,
     });
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_MOVED, {
+        fileId: fileId,
+        fileName: file.original_name,
+        targetFolderId: targetFolderId,
+        movedBy: userId
+    });
+
     return updated;
 }
 
@@ -592,6 +622,15 @@ export async function moveFolder(
         },
         ip,
         userAgent,
+    });
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_MOVED, {
+        folderId: folderId,
+        folderName: folder.name,
+        fromParentId: folder.parent_folder_id,
+        toParentId: targetParentId,
+        movedBy: userId
     });
 
     return updated;

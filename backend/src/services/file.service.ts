@@ -24,7 +24,13 @@ import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
 import { UPLOADS_DIR } from "../config/multer"; // single source of truth for upload dir
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { explainDuplicate } from './AI/duplicateExplain.service';
+import { File as PrismaFile } from '../generated/prisma';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 import { createVersion } from './version.service';
+import { encryptFile, isEncryptionEnabled, decryptFile } from '../utils/fileEncryption'
+import * as Y from 'yjs'
 
 // ---------------------------------------------------------------------------
 // CUSTOM ERROR CLASSES
@@ -159,7 +165,7 @@ export const uploadFile = async (
     ip: string,
     userAgent: string,
     folderId?: number
-): Promise<{ file: object; isDuplicate: boolean }> => {
+): Promise<{ file: object; isDuplicate: boolean; duplicateReason?: string | null }> => {
     // STEP 1: Verify the uploader has editor or admin role in this team
     await verifyEditorRole(uploadedBy, teamId);
 
@@ -190,6 +196,7 @@ export const uploadFile = async (
 
     let storagePath: string;
     let isDuplicate: boolean;
+    let duplicateReason: string | null = null;
 
     if (existingContent) {
         // Content duplicate -> delete redundant disk copy
@@ -198,20 +205,44 @@ export const uploadFile = async (
         }
         storagePath = existingContent.storage_path;
         isDuplicate = true;
+        // Generate AI explanation for the duplicate
+        duplicateReason = await explainDuplicate(teamId, multerFile.originalname, existingContent.id);
     } else {
-        // Truly new file
         storagePath = multerFile.path;
         isDuplicate = false;
     }
 
+    // STEP 5.5: Encryption (Week 15)
+    // We only encrypt truly new files. Duplicates share the original's storage path
+    // and were already encrypted (or not) when first uploaded.
+    let encryptionIv: string | null = null;
+    if (isEncryptionEnabled()) {
+        if (isDuplicate && existingContent) {
+            // Duplicate content -> copy the IV from the original file
+            // Since they share the storage path, they MUST share the same IV.
+            encryptionIv = (existingContent as any).encryption_iv;
+        } else if (!isDuplicate) {
+            // Truly new file -> encrypt it
+            try {
+                const result = await encryptFile(multerFile.path);
+                encryptionIv = result.iv;
+                console.log(`[Upload] File encrypted, IV generated: ${encryptionIv}`);
+            } catch (err) {
+                console.error('[Upload] Encryption failed:', err);
+                // Don't fail the upload — store unencrypted with null IV
+                // The download handler checks for null IV and serves file directly
+            }
+        }
+    }
+
     if (fileWithSameName) {
         // NAME CLASH -> POTENTIAL NEW VERSION
-        
+
         if (fileWithSameName.hash === hash) {
             // EXACT SAME FILE UPLOADED AGAIN (Same Name AND Same Content)
             // It's already deduplicated above (fs.unlinkSync ran).
             // Do NOT create a version. Just return the existing file to avoid spamming versions.
-            return { file: fileWithSameName, isDuplicate: true };
+            return { file: fileWithSameName, isDuplicate: true, duplicateReason };
         }
 
         // DIFFERENT CONTENT -> CREATE A NEW VERSION
@@ -241,9 +272,17 @@ export const uploadFile = async (
             metadata: {
                 file_name: updatedFile.original_name,
                 version_created: true,
+                is_duplicate: isDuplicate,
+                duplicate_reason: duplicateReason
             },
             ip,
             userAgent,
+        });
+
+        // Real-time notification via helper
+        emitToTeam(teamId, SOCKET_EVENTS.FILE_UPLOADED, {
+            file: updatedFile as unknown as Record<string, unknown>,
+            uploadedBy: uploadedBy
         });
 
         return { file: updatedFile, isDuplicate: false };
@@ -262,9 +301,10 @@ export const uploadFile = async (
             hash,
             uploaded_by: uploadedBy,
             is_deleted: false,
+            encryption_iv: encryptionIv, // ← ADD THIS
         },
     });
-    
+
     void logActivity({
         teamId,
         userId: uploadedBy,          // your function uses uploadedBy, not userId
@@ -274,11 +314,19 @@ export const uploadFile = async (
         metadata: {
             file_name: file.original_name,   // ← THIS is what the renderer looks for
             file_size: file.file_size,        // keep for reference but we'll hide it
+            is_duplicate: isDuplicate,
+            duplicate_reason: duplicateReason
         },
         ip,
         userAgent,
     });
-    
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_UPLOADED, {
+        file: file as unknown as Record<string, unknown>,
+        uploadedBy: uploadedBy
+    });
+
     return { file, isDuplicate };
 };
 
@@ -459,35 +507,40 @@ export async function listFiles(
 //   path.resolve() converts relative → absolute using process.cwd() as base.
 //   process.cwd() is the directory where `node` was launched (your project root).
 // ===========================================================================
-export const getDownloadPath = async (
+// In file.service.ts — add import:
+
+// Find your getFileForDownload or downloadFile service function
+// It currently returns the storage_path for res.download() or res.sendFile()
+
+// REPLACE the direct file serving with this:
+export async function getFileForDownload(
     fileId: number,
+    teamId: number,
     userId: number
-): Promise<{ absolutePath: string; originalName: string }> => {
-    // Reuse getFileById — it handles not-found and membership checks
-    const file = (await getFileById(fileId, userId)) as {
-        storage_path: string;
-        original_name: string;
-    };
+): Promise<{ buffer: Buffer | null; storagePath: string | null; file: PrismaFile }> {
 
-    // Convert relative path → absolute path
-    // Example: "uploads/1710000000-report.pdf"
-    //       → "/home/user/project/uploads/1710000000-report.pdf"
-    const absolutePath = path.resolve(file.storage_path);
+    await assertTeamMember(userId, teamId)
 
-    // Safety check: does the file actually exist on disk?
-    // This can fail if the /uploads folder was manually cleared or the server
-    // was moved without copying the uploads directory.
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: false }
+    })
+    if (!file) throw new AppError('File not found', 404)
+
+    const absolutePath = path.resolve(file.storage_path)
     if (!fs.existsSync(absolutePath)) {
-        throw new FileNotFoundError(
-            "File record exists but the file is missing from storage"
-        );
+        throw new AppError('File not found on disk', 404)
     }
 
-    return {
-        absolutePath,
-        originalName: file.original_name, // e.g. "Q3 Budget Report.xlsx"
-    };
-};
+    // If file has an IV, it's encrypted — decrypt to buffer for streaming
+    // If no IV, it's a legacy unencrypted file — serve directly
+    // WHY RETURN BOTH: Controller uses buffer for encrypted, path for unencrypted
+    if (file.encryption_iv && isEncryptionEnabled()) {
+        const buffer = decryptFile(absolutePath, file.encryption_iv)
+        return { buffer, storagePath: null, file }
+    } else {
+        return { buffer: null, storagePath: absolutePath, file }
+    }
+}
 
 // ===========================================================================
 // SERVICE FUNCTION 5: softDeleteFile
@@ -560,12 +613,18 @@ export const softDeleteFile = async (
         targetId: fileId,
         metadata: {
             fileId,
-            file_name: file.original_name,   // ← THIS is what the renderer looks for
-
+            file_name: file.original_name,
         },
         ip,
         userAgent,
     });
+
+    // Real-time notification via helper
+    emitToTeam(file.team_id, SOCKET_EVENTS.FILE_DELETED, {
+        fileId: fileId,
+        deletedBy: userId
+    });
+
     // No return value needed — the controller will send 200 { message: "File deleted" }
 };
 
@@ -636,8 +695,94 @@ export const renameFile = async (
 
     });
 
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_RENAMED, {
+        fileId,
+        oldName: file.original_name,
+        newName: newName.trim(),
+        renamedBy: userId
+    });
+
     return updated;
 };
+
+// ===========================================================================
+// HELPER: extractHtmlFromYjsState
+// ===========================================================================
+// PURPOSE: Converts a binary Yjs CRDT state (stored in file.yjs_state or
+//          document.yjs_state) into an HTML string for preview.
+//
+// HOW IT WORKS:
+//   TipTap v2 stores its content as a Yjs XmlFragment named 'default'.
+//   We decode the binary state, traverse the XML tree, and emit HTML tags.
+//   Inline formatting (bold, italic, etc.) is read from XmlText attributes.
+//
+// WHY THIS IS SAFE:
+//   All text is HTML-escaped before output. The caller should still
+//   sanitize with DOMPurify on the frontend for belt-and-suspenders safety.
+// ===========================================================================
+function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
+    if (node instanceof Y.XmlText) {
+        const raw = String(node.toJSON())
+        const text = raw
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>')
+        const attrs = node.getAttributes()
+        let result = text || ''
+        if (attrs.code)      result = `<code>${result}</code>`
+        if (attrs.bold)      result = `<strong>${result}</strong>`
+        if (attrs.italic)    result = `<em>${result}</em>`
+        if (attrs.underline) result = `<u>${result}</u>`
+        if (attrs.strike)    result = `<s>${result}</s>`
+        return result
+    }
+
+    if (node instanceof Y.XmlFragment) {
+        return Array.from(node as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+    }
+
+    const el = node as Y.XmlElement
+    const tag = el.nodeName
+    const attrs = el.getAttributes()
+    const children = Array.from(el as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+
+    switch (tag) {
+        case 'paragraph':     return `<p>${children || '<br>'}</p>`
+        case 'heading': {
+            const level = Number(attrs.level) || 1
+            return `<h${level}>${children}</h${level}>`
+        }
+        case 'bulletList':    return `<ul>${children}</ul>`
+        case 'orderedList':   return `<ol>${children}</ol>`
+        case 'listItem':      return `<li>${children}</li>`
+        case 'taskList':      return `<ul class="task-list">${children}</ul>`
+        case 'taskItem': {
+            const checked = attrs.checked ? ' checked' : ''
+            return `<li><label><input type="checkbox"${checked} disabled> ${children}</label></li>`
+        }
+        case 'blockquote':    return `<blockquote>${children}</blockquote>`
+        case 'codeBlock':     return `<pre><code>${children}</code></pre>`
+        case 'hardBreak':     return '<br>'
+        case 'horizontalRule':return '<hr>'
+        default:              return `<div>${children}</div>`
+    }
+}
+
+export function extractHtmlFromYjsState(yjsState: Buffer): string {
+    try {
+        const ydoc = new Y.Doc()
+        Y.applyUpdate(ydoc, new Uint8Array(yjsState))
+        const xmlFragment = ydoc.getXmlFragment('default')
+        const html = yjsNodeToHtml(xmlFragment)
+        ydoc.destroy()
+        return html || '<p><em>This document is empty.</em></p>'
+    } catch (err: any) {
+        console.error('[extractHtmlFromYjsState] Error:', err.message)
+        return '<p><em>Preview could not be generated from this document.</em></p>'
+    }
+}
 
 // ===========================================================================
 // SERVICE FUNCTION 7: getFilePreview
@@ -654,6 +799,7 @@ export const getFilePreview = async (
     streamable?: boolean;
     previewable: boolean;
     storagePath?: string;
+    buffer?: Buffer; // Added to support decrypted in-memory previews
     mimeType?: string;
     type?: 'html';
     content?: string;
@@ -674,21 +820,61 @@ export const getFilePreview = async (
 
     const mime = file.mime_type.toLowerCase();
 
+    // ── NEW: Collaborative content takes priority over disk content ───────────
+    // WHY: When a user edits a .docx/.txt/.md file in the collaborative editor,
+    //   the canonical content is in file.yjs_state (in DB), NOT the disk file.
+    //   The disk file (storage_path) only reflects the original uploaded content.
+    //   Without this check, the preview would show STALE content from disk.
+    const isCollaborativeType = (
+        mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        mime.includes('word') ||
+        mime.startsWith('text/') ||
+        file.original_name.toLowerCase().endsWith('.md')
+    )
+    if (file.yjs_state && (file.yjs_state as Buffer).length > 20 && isCollaborativeType) {
+        const html = extractHtmlFromYjsState(file.yjs_state as Buffer)
+        return { previewable: true, type: 'html', content: html }
+    }
+
+    // ─── NEW DECRYPTION LOGIC ────────────────────────────────────────────────
+    let fileBuffer: Buffer | null = null;
+
+    // We only NEED the buffer immediately for DOCX/XLSX/Text.
+    // For PDFs/Images, we only need the buffer if it's encrypted.
+    if (file.encryption_iv && isEncryptionEnabled()) {
+        fileBuffer = decryptFile(absolutePath, file.encryption_iv);
+    }
+
     // Direct streams
     if (mime === 'application/pdf' || mime.startsWith('image/')) {
-        return {
-            streamable: true,
-            previewable: true,
-            storagePath: absolutePath,
-            mimeType: mime
-        };
+        if (fileBuffer) {
+            // It's encrypted — we must send the decrypted buffer
+            return {
+                streamable: true,
+                previewable: true,
+                buffer: fileBuffer,
+                mimeType: mime
+            };
+        } else {
+            // Unencrypted — stream directly from disk for better memory usage
+            return {
+                streamable: true,
+                previewable: true,
+                storagePath: absolutePath,
+                mimeType: mime
+            };
+        }
+    }
+
+    // For all other types (DOCX, XLSX, Text), we need the buffer regardless.
+    if (!fileBuffer) {
+        fileBuffer = fs.readFileSync(absolutePath);
     }
 
     // DOCX conversion
     if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || mime.includes('word')) {
         try {
-            const buffer = await fs.promises.readFile(absolutePath);
-            const result = await mammoth.convertToHtml({ buffer });
+            const result = await mammoth.convertToHtml({ buffer: fileBuffer });
             return { previewable: true, type: 'html', content: result.value };
         } catch (error) {
             return { previewable: false };
@@ -698,7 +884,7 @@ export const getFilePreview = async (
     // XLSX conversion
     if (mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || mime === 'application/vnd.ms-excel' || mime.includes('excel') || mime.includes('sheet')) {
         try {
-            const workbook = xlsx.readFile(absolutePath);
+            const workbook = xlsx.read(fileBuffer);
             const sheetName = workbook.SheetNames[0];
             const html = xlsx.utils.sheet_to_html(workbook.Sheets[sheetName]);
             return { previewable: true, type: 'html', content: html };
@@ -720,7 +906,7 @@ export const getFilePreview = async (
             .some(ext => file.original_name.toLowerCase().endsWith(ext))
     ) {
         try {
-            const content = await fs.promises.readFile(absolutePath, 'utf-8');
+            const content = fileBuffer.toString('utf-8');
             const escaped = content
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')

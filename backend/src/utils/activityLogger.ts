@@ -30,9 +30,20 @@ export type ActivityAction =
     | 'file_version_created'
     | 'version_restored'
     | 'link_created'
-    | 'link_revoked';
+    | 'link_revoked'
+    | 'announcement_posted'
+    | 'announcement_pinned'
+    | 'member_joined'
+    | 'member_left'
+    | 'member_role_changed'
+    | 'user_mentioned'
+    | 'document_created'
+    | 'document_renamed'
+    | 'document_moved'
+    | 'document_deleted'
+    | 'document_restored';
 
-export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user';
+export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user' | 'document';
 
 // ============================================================
 // FUNCTION: logActivity

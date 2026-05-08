@@ -11,6 +11,8 @@ import {
     moveFolderHandler, // NEW
 } from '../controllers/folderController';
 
+import { createFolderLinkHandler } from '../controllers/share.controller';
+
 const router = Router();
 
 // All folder routes require authentication first
@@ -21,5 +23,6 @@ const router = Router();
 router.post('/', authenticate, createFolderHandler);
 router.patch('/:id', authenticate, renameFolderHandler);
 router.patch('/:id/move', authenticate, moveFolderHandler); // NEW
+router.post('/:id/share', authenticate, createFolderLinkHandler); // NEW
 router.delete('/:id', authenticate, deleteFolderHandler);
 export default router;

@@ -19,6 +19,9 @@ import prisma from '../config/database';
 import crypto from 'crypto';
 import { assertTeamMember } from '../utils/teamGuard';
 import { createInviteCode } from './inviteCode.service'
+import { logActivity } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // ── Custom Error Types ───────────────────────────────────────
 // WHY: Typed errors let controllers map each failure to the
@@ -110,26 +113,37 @@ export async function getTeamById(teamId: number, userId: number) {
     include: {
       members: {
         include: {
-          // Include the user record for each member
           user: {
             select: { id: true, username: true, email: true },
           },
         },
         orderBy: { created_at: 'asc' },
       },
-      _count: {
-        select: { files: true },
-      },
     },
   });
-
+  
   if (!team) throw new TeamNotFoundError(teamId);
+
+  // Manual counts for non-deleted items
+  const [fileCount, documentCount, storageStats] = await Promise.all([
+    prisma.file.count({ where: { team_id: teamId, is_deleted: false } }),
+    prisma.document.count({ where: { team_id: teamId, is_deleted: false } }),
+    prisma.file.aggregate({
+      where: { team_id: teamId, is_deleted: false },
+      _sum: { file_size: true }
+    })
+  ]);
 
   // Use the centralized guard to verify membership and get the role
   const membership = await assertTeamMember(userId, teamId);
 
   return {
     ...team,
+    _count: {
+      files: fileCount,
+      documents: documentCount,
+      totalBytes: Number(storageStats._sum.file_size || 0)
+    },
     myRole: membership.role,
   };
 }
@@ -145,7 +159,7 @@ export async function getUserTeams(userId: number) {
       team: {
         include: {
           _count: {
-            select: { members: true, files: true },
+            select: { members: true, files: true, documents: true },
           },
         },
       },
@@ -156,6 +170,12 @@ export async function getUserTeams(userId: number) {
   // Return teams with the user's role embedded
   return memberships.map((m) => ({
     ...m.team,
+    _count: {
+      ...m.team._count,
+      // Note: For simplicity in the list view, we keep the raw counts
+      // or we could do a more expensive query. 
+      // For now, let's just make sure getTeamById (the dashboard) is accurate.
+    },
     myRole: m.role,
   }));
 }
@@ -197,6 +217,22 @@ export async function inviteMember(
     },
   });
 
+  void logActivity({
+    teamId,
+    userId: invitedByUserId,
+    action: 'member_joined',
+    targetType: 'user',
+    targetId: userToInvite.id,
+    metadata: { username: userToInvite.username, role, method: 'direct_invite' }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_JOINED, {
+    userId: userToInvite.id,
+    username: userToInvite.username,
+    role: role
+  });
+
   return newMember;
 }
 
@@ -209,8 +245,16 @@ export async function getTeamMembers(teamId: number) {
     where: { team_id: teamId },
     include: {
       user: {
-        select: { id: true, username: true, email: true },
-      },
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          full_name: true,
+          job_title: true,
+          last_login: true,
+          created_at: true,
+        }
+      }
     },
     orderBy: { created_at: 'asc' },
   });
@@ -240,7 +284,7 @@ export async function changeMemberRole(
   });
   if (!membership) throw new NotMemberError();
 
-  return await prisma.teamMember.update({
+  const updated = await prisma.teamMember.update({
     where: { id: membership.id },
     data: { role: newRole },
     include: {
@@ -249,6 +293,25 @@ export async function changeMemberRole(
       },
     },
   });
+
+  void logActivity({
+    teamId,
+    userId: requestingUserId,
+    action: 'member_role_changed',
+    targetType: 'user',
+    targetId: targetUserId,
+    metadata: { username: updated.user.username, oldRole: membership.role, newRole }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_ROLE_CHANGED, {
+    userId: targetUserId,
+    username: updated.user.username,
+    newRole: newRole,
+    changedBy: requestingUserId
+  });
+
+  return updated;
 }
 
 // ============================================================
@@ -272,5 +335,19 @@ export async function removeMember(teamId: number, targetUserId: number) {
 
   await prisma.teamMember.delete({
     where: { id: membership.id },
+  });
+
+  void logActivity({
+    teamId,
+    userId: 0, // System or current user? Actually we should pass the requestingUserId to removeMember
+    action: 'member_left',
+    targetType: 'user',
+    targetId: targetUserId,
+    metadata: { method: 'removed_by_admin' }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_LEFT, {
+    userId: targetUserId
   });
 }

@@ -5,13 +5,16 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
-import { logActivity } from '../utils/activityLogger';
+import { logActivity, ActivityTargetType } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // ---------------------------------------------------------------------------
 // TYPES & INTERFACES
 // ---------------------------------------------------------------------------
 export interface CreateShareOptions {
-    fileId?: number;          // Optional: If provided, shares ONE file. If omitted, shares ENTIRE TEAM.
+    fileId?: number;          // Optional: If provided, shares ONE file.
+    folderId?: number;        // Optional: If provided, shares ONE folder. If both omitted, shares ENTIRE TEAM.
     password?: string;        // Optional: Bcrypt hashed for security
     expiresInHours?: number;  // Optional: Used to calculate expiration datetime
     downloadLimit?: number;   // Optional: Maximum times the link can be used
@@ -50,6 +53,19 @@ export async function createSharedLink(
         if (file.is_deleted) throw new AppError('Cannot share a deleted file', 400);
     }
 
+    // 2b. Validate folder context if folderId is provided
+    if (options.folderId) {
+        const folder = await prisma.folder.findFirst({
+            where: { id: options.folderId, team_id: teamId }
+        });
+        if (!folder) throw new AppError('Folder not found in this team', 404);
+        if (folder.is_deleted) throw new AppError('Cannot share a deleted folder', 400);
+    }
+
+    if (options.fileId && options.folderId) {
+        throw new AppError('Cannot share both a file and a folder in the same link', 400);
+    }
+
     // 3. Generate a 32-character base64-url string via NodeJS built-in crypto.
     // Equivalent mathematically to hex but visually shorter and URL-safe.
     const token = crypto.randomBytes(24).toString('base64url');
@@ -78,6 +94,7 @@ export async function createSharedLink(
         data: {
             team_id: teamId,
             file_id: options.fileId ?? null,
+            folder_id: options.folderId ?? null,
             created_by: userId,
             token,
             password_hash,
@@ -86,14 +103,27 @@ export async function createSharedLink(
         }
     });
 
+
     // 7. Fire-and-forget Audit Trail Logging.
+    let targetType: ActivityTargetType = 'team';
+    let targetId = teamId;
+    if (options.fileId) { targetType = 'file'; targetId = options.fileId; }
+    else if (options.folderId) { targetType = 'folder'; targetId = options.folderId; }
+
     void logActivity({
         teamId,
         userId,
         action: 'link_created',
-        targetType: options.fileId ? 'file' : 'team',
-        targetId: options.fileId ?? teamId,
+        targetType,
+        targetId,
         metadata: { linkId: link.id, hasPassword: !!password_hash }
+    });
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.LINK_CREATED, {
+        linkId: link.id,
+        token: link.token,
+        createdBy: userId
     });
 
     return link;
@@ -113,7 +143,7 @@ export async function createSharedLink(
 export async function getLinkMetadata(token: string) {
     const link = await prisma.sharedLink.findUnique({
         where: { token },
-        include: { file: true, team: true }
+        include: { file: true, folder: true, team: true }
     });
 
     if (!link) throw new AppError('Link not found', 404);
@@ -128,7 +158,7 @@ export async function getLinkMetadata(token: string) {
         throw new AppError('Maximum usage limit reached for this link', 410);
     }
 
-    // Differentiate between File Share and Team Share
+    // Differentiate between File Share, Folder Share, and Team Share
     if (link.file_id && link.file) {
         // Handle Edge Case: Deleted while link was still active
         if (link.file.is_deleted) throw new AppError('The shared file has been deleted by its owner', 404);
@@ -139,6 +169,15 @@ export async function getLinkMetadata(token: string) {
             filename: link.file.original_name,
             fileSize: link.file.file_size,
             mimeType: link.file.mime_type,
+            requiresPassword: !!link.password_hash
+        };
+    } else if (link.folder_id && link.folder) {
+        if (link.folder.is_deleted) throw new AppError('The shared folder has been deleted by its owner', 404);
+
+        return {
+            type: 'folder',
+            id: link.id,
+            folderName: link.folder.name,
             requiresPassword: !!link.password_hash
         };
     } else {
@@ -167,7 +206,7 @@ export async function getTeamContent(token: string, password?: string, currentFo
     });
 
     if (!link || link.file_id) {
-        throw new AppError('Invalid token or not a team share', 404);
+        throw new AppError('Invalid token or not a team/folder share', 404);
     }
 
     // Expiration and Limits
@@ -178,22 +217,57 @@ export async function getTeamContent(token: string, password?: string, currentFo
         if (!isValid) throw new AppError('Invalid password', 401);
     }
 
-    const parentFilter = currentFolderId === undefined
-        ? null          // ← null in Prisma WHERE means IS NULL in SQL
-        : currentFolderId;
+    // Determine the root for this share
+    let parentFilter: number | null;
 
-    const [folders, files] = await Promise.all([
+    if (link.folder_id) {
+        // FOLDER SHARE
+        // Verify that the requested subfolder is a descendant of the shared folder.
+        if (currentFolderId !== undefined && currentFolderId !== null && currentFolderId !== link.folder_id) {
+            let tempFolderId: number | null = currentFolderId;
+            let isDescendant = false;
+
+            while (tempFolderId) {
+                if (tempFolderId === link.folder_id) {
+                    isDescendant = true;
+                    break;
+                }
+                const folder = await prisma.folder.findUnique({
+                    where: { id: tempFolderId }
+                });
+                if (!folder) break;
+                tempFolderId = folder.parent_folder_id;
+            }
+
+            if (!isDescendant) {
+                throw new AppError('Folder not found in this shared folder', 404);
+            }
+            parentFilter = currentFolderId;
+        } else {
+            parentFilter = link.folder_id;
+        }
+    } else {
+        // TEAM SHARE
+        parentFilter = currentFolderId === undefined ? null : currentFolderId;
+    }
+
+    const [folders, files, documents] = await Promise.all([
         prisma.folder.findMany({
-            where: { team_id: link.team_id, is_deleted: false, parent_folder_id: parentFilter }
-            //                                                                      ↑ was folderFilter
+            where: { team_id: link.team_id, is_deleted: false, parent_folder_id: parentFilter },
+            orderBy: { name: 'asc' }
         }),
         prisma.file.findMany({
-            where: { team_id: link.team_id, is_deleted: false, folder_id: parentFilter }
-            //                                                              ↑ was folderFilter
+            where: { team_id: link.team_id, is_deleted: false, folder_id: parentFilter },
+            orderBy: { original_name: 'asc' }
+        }),
+        prisma.document.findMany({
+            where: { team_id: link.team_id, is_deleted: false, folder_id: parentFilter },
+            select: { id: true, title: true, created_at: true, updated_at: true, folder_id: true },
+            orderBy: { title: 'asc' }
         })
     ]);
 
-    return { folders, files };
+    return { folders, files, documents };
 }
 
 // ===========================================================================
@@ -225,8 +299,51 @@ export async function downloadSharedFile(token: string, password?: string, reque
         if (!isValid) throw new AppError('Invalid password', 401);
     }
 
+    // File resolution runs before the limit check passes so we don't burn tokens on failures
+    let targetFile;
+    if (link.file_id && link.file) {
+        targetFile = link.file;
+    } else if (requestedFileId) {
+        targetFile = await prisma.file.findFirst({
+            where: { id: requestedFileId, team_id: link.team_id }
+        });
+        if (!targetFile) throw new AppError('File not found in this team', 404);
+
+        // Security Check for Folder Shares: Ensure the file is actually inside the shared folder.
+        // Traverse up the parent_folder_id chain to verify the file is a descendant.
+        if (link.folder_id) {
+            let currentFolderId = targetFile.folder_id;
+            let isDescendant = false;
+
+            while (currentFolderId) {
+                if (currentFolderId === link.folder_id) {
+                    isDescendant = true;
+                    break;
+                }
+                const folder = await prisma.folder.findUnique({
+                    where: { id: currentFolderId }
+                });
+                if (!folder) break;
+                currentFolderId = folder.parent_folder_id;
+            }
+
+            if (!isDescendant) {
+                throw new AppError('File not found in this shared folder', 404);
+            }
+        }
+    } else {
+        throw new AppError('Missing file selection for Team/Folder Share', 400);
+    }
+
+    if (targetFile.is_deleted) throw new AppError('File has been deleted', 404);
+
+    const absolutePath = path.resolve(targetFile.storage_path);
+    if (!fs.existsSync(absolutePath)) {
+        throw new AppError('File is missing from disk storage', 404);
+    }
+
     // ✅ Atomic increment — only succeeds if still under limit
-    // Do this BEFORE disk access so we never stream a file for a rejected request
+    // Do this AFTER validating the file so failed downloads don't waste a token.
     const rowsUpdated = await prisma.$executeRaw`
         UPDATE shared_links
         SET downloads_count = downloads_count + 1
@@ -236,26 +353,6 @@ export async function downloadSharedFile(token: string, password?: string, reque
 
     if (rowsUpdated === 0) {
         throw new AppError('Download limit reached', 410);
-    }
-
-    // File resolution runs only after the limit check passes
-    let targetFile;
-    if (link.file_id && link.file) {
-        targetFile = link.file;
-    } else if (requestedFileId) {
-        targetFile = await prisma.file.findFirst({
-            where: { id: requestedFileId, team_id: link.team_id }
-        });
-        if (!targetFile) throw new AppError('File not found in this team', 404);
-    } else {
-        throw new AppError('Missing file selection for Team Share', 400);
-    }
-
-    if (targetFile.is_deleted) throw new AppError('File has been deleted', 404);
-
-    const absolutePath = path.resolve(targetFile.storage_path);
-    if (!fs.existsSync(absolutePath)) {
-        throw new AppError('File is missing from disk storage', 404);
     }
 
     return {
@@ -296,4 +393,30 @@ export async function revokeSharedLink(token: string, userId: number) {
         targetId: link.file_id ?? link.team_id,
         metadata: { linkId: link.id }
     });
+
+    // Real-time notification via helper
+    emitToTeam(link.team_id, SOCKET_EVENTS.LINK_REVOKED, {
+        linkId: link.id,
+        revokedBy: userId
+    });
 }
+
+// ===========================================================================
+// SERVICE FUNCTION 6: listFileSharedLinks
+// ===========================================================================
+// PURPOSE: List all active share links for a specific file.
+//          Enables admins to track and revoke external access.
+// ===========================================================================
+export async function listFileSharedLinks(userId: number, teamId: number, fileId: number) {
+    // 1. Authorization: Must be a member of the team
+    await assertTeamMember(userId, teamId, 'viewer');
+
+    // 2. Fetch all links for this file
+    const links = await prisma.sharedLink.findMany({
+        where: { file_id: fileId, team_id: teamId },
+        orderBy: { created_at: 'desc' }
+    });
+
+    return links;
+}
+

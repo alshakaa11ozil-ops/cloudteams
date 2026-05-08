@@ -13,10 +13,14 @@ model User {
   username             String         @unique
   email                String         @unique
   password_hash        String
+  last_login           DateTime?      @default(now())
   created_at           DateTime       @default(now())
   updated_at           DateTime       @updatedAt
   two_factor_secret    String?
   two_factor_confirmed Boolean        @default(false)
+    full_name   String?  @db.VarChar(100)
+  job_title   String?  @db.VarChar(100)
+  avatar_color String? @db.VarChar(7)     
   activityLogs         ActivityLog[]
   announcements        Announcement[]
   comments             Comment[]
@@ -26,6 +30,7 @@ model User {
   folders              Folder[]
   sharedLinks          SharedLink[]
   teams                TeamMember[]
+  documents            Document[]     @relation("DocumentCreator")
 
   @@map("users")
 }
@@ -46,6 +51,8 @@ model Team {
   folders             Folder[]
   sharedLinks         SharedLink[]
   members             TeamMember[]
+  aiCache             AiCache[]
+  documents           Document[]
 
   @@map("teams")
 }
@@ -78,9 +85,12 @@ model Folder {
   parent           Folder?   @relation("FolderChildren", fields: [parent_folder_id], references: [id])
   children         Folder[]  @relation("FolderChildren")
   team             Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  sharedLinks      SharedLink[]
+  documents        Document[]
 
   @@map("folders")
 }
+
 
 model File {
   id               Int           @id @default(autoincrement())
@@ -108,6 +118,15 @@ model File {
   team             Team          @relation(fields: [team_id], references: [id], onDelete: Cascade)
   uploader         User          @relation("FileUploader", fields: [uploaded_by], references: [id])
   sharedLinks      SharedLink[]
+  encryption_iv  String?   @db.VarChar(32)  // hex-encoded 16-byte IV, null = not encrypted
+
+  // ── Collaborative editing fields ──────────────────────────────────────
+  // yjs_state: Binary Yjs CRDT snapshot. Populated when a user first opens
+  //   this file in the collaborative editor. Compacted before every save
+  //   to remove dead keystroke history (prevents BYTEA bloat).
+  // yjs_last_saved: Tracks when Hocuspocus last persisted the state.
+  yjs_state      Bytes?
+  yjs_last_saved DateTime?
 
   @@index([lockExpiresAt], map: "idx_files_lock_expiry")
   @@map("files")
@@ -128,19 +147,21 @@ model FileVersion {
 }
 
 model Comment {
-  id         Int       @id @default(autoincrement())
-  file_id    Int
-  team_id    Int
-  user_id    Int
-  content    String
-  resolved   Boolean   @default(false)
-  created_at DateTime  @default(now())
-  updated_at DateTime  @updatedAt
-  deleted_at DateTime?
-  is_deleted Boolean   @default(false)
-  file       File      @relation(fields: [file_id], references: [id], onDelete: Cascade)
-  team       Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
-  user       User      @relation(fields: [user_id], references: [id])
+  id          Int       @id @default(autoincrement())
+  file_id     Int?
+  document_id Int?
+  team_id     Int
+  user_id     Int
+  content     String
+  resolved    Boolean   @default(false)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at  DateTime?
+  is_deleted  Boolean   @default(false)
+  file        File?     @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  document    Document? @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  team        Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [user_id], references: [id])
 
   @@map("comments")
 }
@@ -165,6 +186,8 @@ model ActivityLog {
 model SharedLink {
   id              Int       @id @default(autoincrement())
   file_id         Int?
+  folder_id       Int?
+  document_id     Int?
   created_by      Int
   token           String    @unique
   password_hash   String?
@@ -175,10 +198,13 @@ model SharedLink {
   team_id         Int
   creator         User      @relation(fields: [created_by], references: [id])
   file            File?     @relation(fields: [file_id], references: [id], onDelete: Cascade)
+  folder          Folder?   @relation(fields: [folder_id], references: [id], onDelete: Cascade)
+  document        Document? @relation(fields: [document_id], references: [id], onDelete: Cascade)
   team            Team      @relation(fields: [team_id], references: [id], onDelete: Cascade)
 
   @@map("shared_links")
 }
+
 
 model Announcement {
   id        Int      @id @default(autoincrement())
@@ -202,4 +228,58 @@ model TokenBlacklist {
   created_at DateTime @default(now())
 
   @@map("token_blacklist")
+}
+
+model AiCache {
+  id         Int      @id @default(autoincrement())
+  team_id    Int
+  feature    String   @db.VarChar(50)
+  target_id  Int?
+  result     String
+  created_at DateTime @default(now())
+  expires_at DateTime
+
+  team Team @relation(fields: [team_id], references: [id], onDelete: Cascade)
+
+  @@unique([team_id, feature, target_id])
+  @@index([team_id, feature])
+  @@map("ai_cache")
+}
+
+// =============================================================================
+// Document — Native CloudTeams collaborative document
+// =============================================================================
+// PURPOSE: A rich-text document stored as binary Yjs CRDT state.
+//          NOT a traditional file — this is a new document type created
+//          inside the editor. No two-way conversion with .txt/.md files.
+//
+// WHY Bytes FOR yjs_state:
+//   Yjs encodes document state as Uint8Array. Storing as PostgreSQL BYTEA
+//   is 3-5x smaller than base64 text. The state is compacted before save
+//   to remove dead keystroke history (CRDT history bloat prevention).
+//
+// PRESENCE IS NOT STORED HERE:
+//   Who is editing and where their cursor is = ephemeral data handled
+//   entirely by the Yjs Awareness Protocol in memory. Zero DB writes
+//   for real-time state.
+model Document {
+  id          Int       @id @default(autoincrement())
+  team_id     Int
+  folder_id   Int?
+  title       String    @default("Untitled Document")
+  created_by  Int
+  yjs_state   Bytes?    // Binary CRDT state — single source of truth
+  last_saved  DateTime?
+  is_deleted  Boolean   @default(false)
+  deleted_at  DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  team    Team    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  folder  Folder? @relation(fields: [folder_id], references: [id])
+  creator User   @relation("DocumentCreator", fields: [created_by], references: [id])
+  comments    Comment[]
+  sharedLinks SharedLink[]
+
+  @@map("documents")
 }

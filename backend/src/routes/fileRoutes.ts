@@ -30,12 +30,14 @@ import {
     downloadFileHandler,
     softDeleteFileHandler,
     listFilesHandler,
-    renameFileHandler,     // ← NEW
-    previewFileHandler,    // ← NEW
+    renameFileHandler,
+    previewFileHandler,
+    openEditorHandler,  // Day 2: open file in collaborative editor
 } from "../controllers/file.controller";
 
 import { moveFileHandler } from '../controllers/folderController';
-import { createFileLinkHandler } from '../controllers/share.controller';
+import { createFileLinkHandler, listFileLinksHandler } from '../controllers/share.controller';
+import { summarizeFileHandler } from '../controllers/aiSummary.controller'
 
 
 const router = Router();
@@ -134,7 +136,22 @@ router.delete(
 // Add this route — PATCH a file to move it to a different folder
 
 router.patch('/:id', authenticate, moveFileHandler);
-router.patch('/:id/rename', authenticate, renameFileHandler);  // rename display name
+router.patch('/:id/rename', authenticate, renameFileHandler);
 router.post('/:id/share', authenticate, createFileLinkHandler);
+router.get('/:id/share', authenticate, listFileLinksHandler);
+
+// ---------------------------------------------------------------------------
+// GET /api/files/:id/open-editor?teamId=X
+// ---------------------------------------------------------------------------
+// Called when a user clicks "Edit" on a .txt, .md, or .docx file.
+// Returns the file content (or indicates Yjs state exists) so the
+// frontend CollaborativeEditor can initialize with real content.
+//
+// WHY BEFORE /:id download route:
+//   Express matches routes in declaration order.
+//   '/:id/open-editor' must come before '/:id' (catch-all) or
+//   requests to /5/open-editor would match /:id with id="5/open-editor".
+// ---------------------------------------------------------------------------
+router.get('/:id/open-editor', authenticate, openEditorHandler);
 
 export default router;
