@@ -19,41 +19,41 @@ import { Prisma } from '../../src/generated/prisma';
 //          both know exactly what fields exist.
 // ─────────────────────────────────────────────────────────────
 export interface AnalyticsResult {
-    storage: {
-        totalBytes: number;           // raw bytes — for programmatic use
-        totalBytesFormatted: string;  // "500.0 MB" — for display
-        fileCount: number;            // active (non-deleted) files
-    };
-    fileTypes: FileTypeRow[];       // breakdown by MIME type
-    memberActivity: MemberActivityRow[]; // leaderboard by action count
-    uploadsPerDay: UploadsPerDayRow[];   // last 7 days of upload counts
-    topFolders: TopFolderRow[];          // folders with most files
+  storage: {
+    totalBytes: number;           // raw bytes — for programmatic use
+    totalBytesFormatted: string;  // "500.0 MB" — for display
+    fileCount: number;            // active (non-deleted) files
+  };
+  fileTypes: FileTypeRow[];       // breakdown by MIME type
+  memberActivity: MemberActivityRow[]; // leaderboard by action count
+  uploadsPerDay: UploadsPerDayRow[];   // last 7 days of upload counts
+  topFolders: TopFolderRow[];          // folders with most files
 }
 
 // Raw SQL result rows — Prisma returns unknown[] from $queryRaw,
 // so we define the expected shape and cast carefully.
 
 interface FileTypeRow {
-    mime_type: string;
-    count: number;   // BigInt from PostgreSQL COUNT — we convert to number
+  mime_type: string;
+  count: number;   // BigInt from PostgreSQL COUNT — we convert to number
 }
 
 interface MemberActivityRow {
-    user_id: number;
-    username: string;
-    email: string;
-    action_count: number;  // BigInt from COUNT — converted
+  user_id: number;
+  username: string;
+  email: string;
+  action_count: number;  // BigInt from COUNT — converted
 }
 
 interface UploadsPerDayRow {
-    day: string;    // ISO date string "2026-04-07"
-    count: number;  // BigInt from COUNT — converted
+  day: string;    // ISO date string "2026-04-07"
+  count: number;  // BigInt from COUNT — converted
 }
 
 interface TopFolderRow {
-    folder_id: number;
-    folder_name: string;
-    file_count: number;  // BigInt from COUNT — converted
+  folder_id: number;
+  folder_name: string;
+  file_count: number;  // BigInt from COUNT — converted
 }
 
 // ════════════════════════════════════════════════════════════
@@ -66,23 +66,23 @@ interface TopFolderRow {
 //           easy to move if needed.
 // ════════════════════════════════════════════════════════════
 function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
+  if (bytes === 0) return '0 B';
 
-    // Define units in ascending order
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  // Define units in ascending order
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
 
-    // Math.floor(Math.log(bytes) / Math.log(1024)) finds which
-    // unit tier the number falls into.
-    // e.g. 524288000 bytes → index 2 → MB
-    const unitIndex = Math.floor(Math.log(bytes) / Math.log(1024));
+  // Math.floor(Math.log(bytes) / Math.log(1024)) finds which
+  // unit tier the number falls into.
+  // e.g. 524288000 bytes → index 2 → MB
+  const unitIndex = Math.floor(Math.log(bytes) / Math.log(1024));
 
-    // Clamp to the largest unit we have (TB)
-    const clampedIndex = Math.min(unitIndex, units.length - 1);
+  // Clamp to the largest unit we have (TB)
+  const clampedIndex = Math.min(unitIndex, units.length - 1);
 
-    // Divide down to the right unit and round to 1 decimal
-    const value = bytes / Math.pow(1024, clampedIndex);
+  // Divide down to the right unit and round to 1 decimal
+  const value = bytes / Math.pow(1024, clampedIndex);
 
-    return `${value.toFixed(1)} ${units[clampedIndex]}`;
+  return `${value.toFixed(1)} ${units[clampedIndex]}`;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -96,10 +96,10 @@ function formatBytes(bytes: number): string {
 //   This is a very common gotcha with raw SQL + Prisma.
 // ════════════════════════════════════════════════════════════
 function toNumber(value: unknown): number {
-    if (typeof value === 'bigint') return Number(value);
-    if (typeof value === 'number') return value;
-    // Fallback: parse string (defensive, shouldn't normally happen)
-    return parseInt(String(value), 10);
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'number') return value;
+  // Fallback: parse string (defensive, shouldn't normally happen)
+  return parseInt(String(value), 10);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -114,26 +114,26 @@ function toNumber(value: unknown): number {
 // ════════════════════════════════════════════════════════════
 export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult> {
 
-    // ── QUERY 1: Storage totals ─────────────────────────────
-    // Prisma aggregate handles SUM and COUNT cleanly for
-    // simple cases — no need for raw SQL here.
-    // _sum.file_size = total bytes used across all active files
-    // _count._all   = number of active files
-    const storagePromise = prisma.file.aggregate({
-        where: {
-            team_id: teamId,
-            is_deleted: false,  // exclude soft-deleted files
-        },
-        _sum: { file_size: true },  // SUM(file_size)
-        _count: { _all: true },       // COUNT(*)
-    });
+  // ── QUERY 1: Storage totals ─────────────────────────────
+  // Prisma aggregate handles SUM and COUNT cleanly for
+  // simple cases — no need for raw SQL here.
+  // _sum.file_size = total bytes used across all active files
+  // _count._all   = number of active files
+  const storagePromise = prisma.file.aggregate({
+    where: {
+      team_id: teamId,
+      is_deleted: false,  // exclude soft-deleted files
+    },
+    _sum: { file_size: true },  // SUM(file_size)
+    _count: { _all: true },       // COUNT(*)
+  });
 
-    // ── QUERY 2: File type breakdown ────────────────────────
-    // We need GROUP BY mime_type with COUNT per group.
-    // Prisma's query builder doesn't support this cleanly
-    // so we use $queryRaw.
-    // COALESCE handles NULL mime_type → shows as 'unknown'
-    const fileTypesPromise = prisma.$queryRaw<FileTypeRow[]>`
+  // ── QUERY 2: File type breakdown ────────────────────────
+  // We need GROUP BY mime_type with COUNT per group.
+  // Prisma's query builder doesn't support this cleanly
+  // so we use $queryRaw.
+  // COALESCE handles NULL mime_type → shows as 'unknown'
+  const fileTypesPromise = prisma.$queryRaw<FileTypeRow[]>`
     SELECT
       COALESCE(mime_type, 'unknown') AS mime_type,
       COUNT(*)                       AS count
@@ -144,15 +144,15 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     ORDER BY count DESC
     LIMIT 10
   `;
-    // LIMIT 10: We only want the top 10 types for the pie chart.
-    // A team could theoretically have 100 MIME types — showing
-    // all of them would be unreadable.
+  // LIMIT 10: We only want the top 10 types for the pie chart.
+  // A team could theoretically have 100 MIME types — showing
+  // all of them would be unreadable.
 
-    // ── QUERY 3: Member activity leaderboard ────────────────
-    // Count activity log entries per user, join to users table
-    // to get their name, order by most active first.
-    // This shows who is contributing most to the team.
-    const memberActivityPromise = prisma.$queryRaw<MemberActivityRow[]>`
+  // ── QUERY 3: Member activity leaderboard ────────────────
+  // Count activity log entries per user, join to users table
+  // to get their name, order by most active first.
+  // This shows who is contributing most to the team.
+  const memberActivityPromise = prisma.$queryRaw<MemberActivityRow[]>`
     SELECT
       u.id         AS user_id,
       u.username   AS username,
@@ -165,17 +165,17 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     ORDER BY action_count DESC
     LIMIT 10
   `;
-    // We join users directly in SQL here because $queryRaw
-    // doesn't support Prisma's include — so we do the join
-    // ourselves in the query.
+  // We join users directly in SQL here because $queryRaw
+  // doesn't support Prisma's include — so we do the join
+  // ourselves in the query.
 
-    // ── QUERY 4: Uploads per day (last 7 days) ──────────────
-    // DATE_TRUNC('day', created_at) collapses each timestamp
-    // to midnight — so all uploads on April 7th become
-    // "2026-04-07 00:00:00" and GROUP BY treats them as one group.
-    // NOW() - INTERVAL '6 days' gives us the last 7 days
-    // including today (day 0 through day 6 = 7 days).
-    const uploadsPerDayPromise = prisma.$queryRaw<UploadsPerDayRow[]>`
+  // ── QUERY 4: Uploads per day (last 7 days) ──────────────
+  // DATE_TRUNC('day', created_at) collapses each timestamp
+  // to midnight — so all uploads on April 7th become
+  // "2026-04-07 00:00:00" and GROUP BY treats them as one group.
+  // NOW() - INTERVAL '6 days' gives us the last 7 days
+  // including today (day 0 through day 6 = 7 days).
+  const uploadsPerDayPromise = prisma.$queryRaw<UploadsPerDayRow[]>`
     SELECT
       DATE_TRUNC('day', created_at)::date AS day,
       COUNT(*)                            AS count
@@ -186,15 +186,15 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     GROUP BY day
     ORDER BY day ASC
   `;
-    // ::date casts the result to a plain date (no time component)
-    // so it serializes as "2026-04-07" not "2026-04-07T00:00:00Z"
-    // which is cleaner for the frontend to display.
+  // ::date casts the result to a plain date (no time component)
+  // so it serializes as "2026-04-07" not "2026-04-07T00:00:00Z"
+  // which is cleaner for the frontend to display.
 
-    // ── QUERY 5: Most active folders ───────────────────────
-    // Count files per folder, join to get folder name.
-    // Files with no folder (folder_id IS NULL) are excluded
-    // because they live in the team root — not a named folder.
-    const topFoldersPromise = prisma.$queryRaw<TopFolderRow[]>`
+  // ── QUERY 5: Most active folders ───────────────────────
+  // Count files per folder, join to get folder name.
+  // Files with no folder (folder_id IS NULL) are excluded
+  // because they live in the team root — not a named folder.
+  const topFoldersPromise = prisma.$queryRaw<TopFolderRow[]>`
     SELECT
       f.id          AS folder_id,
       f.name        AS folder_name,
@@ -208,78 +208,78 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     ORDER BY file_count DESC
     LIMIT 5
   `;
-    // Both the folder AND the file must not be deleted.
-    // If a folder is active but all its files are deleted,
-    // it wouldn't appear anyway because COUNT = 0 and the
-    // JOIN would return no rows.
+  // Both the folder AND the file must not be deleted.
+  // If a folder is active but all its files are deleted,
+  // it wouldn't appear anyway because COUNT = 0 and the
+  // JOIN would return no rows.
 
-    // ── Run all 5 queries simultaneously ──────────────────
-    // Promise.all takes an array of promises and resolves when
-    // ALL of them complete. If any one throws, the whole
-    // Promise.all rejects — which is fine, the controller
-    // catches it and returns 500.
-    const [
-        storageResult,
-        fileTypesRaw,
-        memberActivityRaw,
-        uploadsPerDayRaw,
-        topFoldersRaw,
-    ] = await Promise.all([
-        storagePromise,
-        fileTypesPromise,
-        memberActivityPromise,
-        uploadsPerDayPromise,
-        topFoldersPromise,
-    ]);
+  // ── Run all 5 queries simultaneously ──────────────────
+  // Promise.all takes an array of promises and resolves when
+  // ALL of them complete. If any one throws, the whole
+  // Promise.all rejects — which is fine, the controller
+  // catches it and returns 500.
+  const [
+    storageResult,
+    fileTypesRaw,
+    memberActivityRaw,
+    uploadsPerDayRaw,
+    topFoldersRaw,
+  ] = await Promise.all([
+    storagePromise,
+    fileTypesPromise,
+    memberActivityPromise,
+    uploadsPerDayPromise,
+    topFoldersPromise,
+  ]);
 
-    // ── Process storage result ─────────────────────────────
-    // _sum.file_size is null if there are zero files — default to 0
-    const totalBytes = toNumber(storageResult._sum.file_size ?? 0);
-    const fileCount = toNumber(storageResult._count._all);
+  // ── Process storage result ─────────────────────────────
+  // _sum.file_size is null if there are zero files — default to 0
+  const totalBytes = toNumber(storageResult._sum.file_size ?? 0);
+  const fileCount = toNumber(storageResult._count._all);
 
-    // ── Convert BigInt fields from raw SQL results ─────────
-    // Every COUNT(*) from $queryRaw comes back as BigInt.
-    // We map each array and convert with toNumber().
-    // If we skip this step, res.json() throws at runtime.
+  // ── Convert BigInt fields from raw SQL results ─────────
+  // Every COUNT(*) from $queryRaw comes back as BigInt.
+  // We map each array and convert with toNumber().
+  // If we skip this step, res.json() throws at runtime.
 
-    const fileTypes: FileTypeRow[] = fileTypesRaw.map(row => ({
-        mime_type: row.mime_type,
-        count: toNumber(row.count),
-    }));
+  const fileTypes: FileTypeRow[] = fileTypesRaw.map(row => ({
+    mime_type: row.mime_type,
+    count: toNumber(row.count),
+  }));
 
-    const memberActivity: MemberActivityRow[] = memberActivityRaw.map(row => ({
-        user_id: toNumber(row.user_id),
-        username: row.username,
-        email: row.email,
-        action_count: toNumber(row.action_count),
-    }));
+  const memberActivity: MemberActivityRow[] = memberActivityRaw.map(row => ({
+    user_id: toNumber(row.user_id),
+    username: row.username,
+    email: row.email,
+    action_count: toNumber(row.action_count),
+  }));
 
-    const uploadsPerDay: UploadsPerDayRow[] = uploadsPerDayRaw.map(row => ({
-        // PostgreSQL returns ::date as a JS Date object — convert to ISO string
-        // String(row.day) safely converts both a JS Date object and a
-        // plain date string to string first. new Date(...) then parses
-        // it, and .split('T')[0] extracts just "2026-04-07".
-        // This avoids instanceof on unknown, which TypeScript rejects.
-        day: new Date(String(row.day)).toISOString().split('T')[0],
-        count: toNumber(row.count),
-    }));
+  const uploadsPerDay: UploadsPerDayRow[] = uploadsPerDayRaw.map(row => ({
+    // PostgreSQL returns ::date as a JS Date object — convert to ISO string
+    // String(row.day) safely converts both a JS Date object and a
+    // plain date string to string first. new Date(...) then parses
+    // it, and .split('T')[0] extracts just "2026-04-07".
+    // This avoids instanceof on unknown, which TypeScript rejects.
+    day: new Date(String(row.day)).toISOString().split('T')[0],
+    count: toNumber(row.count),
+  }));
 
-    const topFolders: TopFolderRow[] = topFoldersRaw.map(row => ({
-        folder_id: toNumber(row.folder_id),
-        folder_name: row.folder_name,
-        file_count: toNumber(row.file_count),
-    }));
+  const topFolders: TopFolderRow[] = topFoldersRaw.map(row => ({
+    folder_id: toNumber(row.folder_id),
+    folder_name: row.folder_name,
+    file_count: toNumber(row.file_count),
+  }));
 
-    // ── Assemble and return final result ───────────────────
-    return {
-        storage: {
-            totalBytes,
-            totalBytesFormatted: formatBytes(totalBytes),
-            fileCount,
-        },
-        fileTypes,
-        memberActivity,
-        uploadsPerDay,
-        topFolders,
-    };
+  // ── Assemble and return final result ───────────────────
+  return {
+    storage: {
+      totalBytes,
+      totalBytesFormatted: formatBytes(totalBytes),
+      fileCount,
+    },
+    fileTypes,
+    memberActivity,
+    uploadsPerDay,
+    topFolders,
+  };
 }

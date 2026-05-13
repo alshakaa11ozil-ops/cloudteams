@@ -3,6 +3,8 @@
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 // ─────────────────────────────────────────────
 // CUSTOM ERROR CLASS
 // PURPOSE: Lets controllers know WHAT went wrong and WHAT HTTP status to send.
@@ -103,6 +105,8 @@ export async function createFolder(
     name: string,
     teamId: number,
     userId: number,
+    ip: string,
+    userAgent: string,
     parentFolderId?: number
 ) {
     // Step 1: Confirm user is a member of this team
@@ -144,8 +148,16 @@ export async function createFolder(
         action: 'folder_created',
         targetType: 'folder',
         targetId: folder.id,
-        metadata: { name: folder.name, parentFolderId: parentFolderId ?? null },
+        metadata: { folder_name: folder.name, parentFolderId: parentFolderId ?? null },
+        ip,
+        userAgent,
     })
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_CREATED, {
+        folder: folder as unknown as Record<string, unknown>,
+        createdBy: userId
+    });
+
     return folder;
 }
 
@@ -191,7 +203,9 @@ export async function renameFolder(
     folderId: number,
     newName: string,
     teamId: number,
-    userId: number
+    userId: number,
+    ip: string,
+    userAgent: string
 ) {
     // Confirm membership
     await assertTeamMember(userId, teamId, 'editor');
@@ -219,8 +233,18 @@ export async function renameFolder(
         action: 'folder_renamed',
         targetType: 'folder',
         targetId: folderId,
-        metadata: { oldName: folder.name, newName },
+        metadata: { oldName: folder.name, newName, folder_name: newName },
+        ip,
+        userAgent,
     });
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_RENAMED, {
+        folderId: folderId,
+        oldName: folder.name,
+        newName: newName,
+        renamedBy: userId
+    });
+
     return updated;
 }
 
@@ -250,6 +274,8 @@ export async function deleteFolder(
     folderId: number,
     teamId: number,
     userId: number,
+    ip: string,
+    userAgent: string,
     recursive: 'false' | 'files' | 'true'  // three explicit string modes
 ) {
     // Confirm membership
@@ -309,6 +335,24 @@ export async function deleteFolder(
             data: { is_deleted: true, deleted_at: now },
         });
 
+        // Audit log
+        void logActivity({
+            teamId,
+            userId,
+            action: 'folder_deleted',
+            targetType: 'folder',
+            targetId: folderId,
+            metadata: { mode: recursive, folder_name: folder.name },
+            ip,
+            userAgent,
+        });
+
+        // Real-time notification via helper
+        emitToTeam(teamId, SOCKET_EVENTS.FOLDER_DELETED, {
+            folderId: folderId,
+            deletedBy: userId
+        });
+
         return { deletedFolders: updatedFolders.count, deletedFiles: 0, orphanedFiles: 0 };
     }
 
@@ -337,6 +381,18 @@ export async function deleteFolder(
             }),
         ]);
 
+        // Audit log
+        void logActivity({
+            teamId,
+            userId,
+            action: 'folder_deleted',
+            targetType: 'folder',
+            targetId: folderId,
+            metadata: { mode: recursive, folder_name: folder.name },
+            ip,
+            userAgent,
+        });
+
         return {
             deletedFolders: deletedFolders.count,
             deletedFiles: 0,                    // no files were deleted
@@ -362,14 +418,19 @@ export async function deleteFolder(
             data: { is_deleted: true, deleted_at: now },
         }),
     ]);
+
+    // Audit log - unified for all modes
     void logActivity({
         teamId,
         userId,
         action: 'folder_deleted',
         targetType: 'folder',
         targetId: folderId,
-        metadata: { mode: recursive, folderId },
+        metadata: { mode: recursive, folder_name: folder.name },
+        ip,
+        userAgent,
     });
+
     return {
         deletedFolders: updatedFolders.count,
         deletedFiles: updatedFiles.count,
@@ -389,7 +450,9 @@ export async function moveFile(
     fileId: number,
     targetFolderId: number | null,
     teamId: number,
-    userId: number
+    userId: number,
+    ip: string,
+    userAgent: string
 ) {
     // Confirm membership
     await assertTeamMember(userId, teamId, 'editor');
@@ -405,6 +468,10 @@ export async function moveFile(
 
     if (!file) {
         throw new AppError('File not found', 404);
+    }
+
+    if (file.lockExpiresAt && file.lockExpiresAt > new Date() && file.lockOwnerUserId !== userId) {
+        throw new AppError('Cannot move file: it is currently locked by another user', 409);
     }
 
     // If moving to a specific folder (not root), validate the destination
@@ -437,7 +504,134 @@ export async function moveFile(
         action: 'file_moved',
         targetType: 'file',
         targetId: fileId,
-        metadata: { fileId, targetFolderId },
+        metadata: { file_name: file.original_name, targetFolderId },
+        ip,
+        userAgent,
     });
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_MOVED, {
+        fileId: fileId,
+        fileName: file.original_name,
+        targetFolderId: targetFolderId,
+        movedBy: userId
+    });
+
+    return updated;
+}
+
+// ─────────────────────────────────────────────
+// SERVICE: moveFolder
+// PURPOSE: Change the parent of a folder — the folder moves to a new location
+//          in the hierarchy (or to root level if targetParentId is null).
+//
+// INPUTS:
+//   folderId       — the folder being moved
+//   targetParentId — destination folder ID (null = move to root)
+//   teamId         — team context for all authorization checks
+//   userId         — must be editor or admin
+//
+// OUTPUTS: The updated Folder record
+//
+// EDGE CASES HANDLED:
+//   1. Moving folder into itself → 400 Bad Request
+//   2. Moving folder into one of its own descendants → 400 (circular reference)
+//      e.g. Moving "Finance" into "Finance/Q1" would make "Finance" its own ancestor
+//   3. Destination folder belongs to another team → 404
+//   4. Destination folder is soft-deleted → 404
+//
+// WHY THE CIRCULAR REFERENCE CHECK:
+//   Without it, you could create a cycle in the folder tree:
+//   A → B → C → A  (A is its own ancestor, infinite loop in tree rendering)
+//   We use getAllDescendantIds (already defined above) to get all descendants
+//   of the folder being moved, then verify the target is NOT in that set.
+// ─────────────────────────────────────────────
+export async function moveFolder(
+    folderId: number,
+    targetParentId: number | null,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) {
+    // Step 1: verify the user has write access
+    await assertTeamMember(userId, teamId, 'editor');
+
+    // Step 2: find the folder being moved
+    const folder = await prisma.folder.findFirst({
+        where: { id: folderId, team_id: teamId, is_deleted: false },
+    });
+
+    if (!folder) {
+        throw new AppError('Folder not found', 404);
+    }
+
+    // Step 3: reject trivially invalid move — folder cannot become its own parent
+    if (targetParentId === folderId) {
+        throw new AppError('A folder cannot be moved into itself', 400);
+    }
+
+    // Step 4: if moving to a specific folder (not root), run extra validation
+    if (targetParentId !== null) {
+        // 4a. Verify the destination folder exists and belongs to the same team
+        const destination = await prisma.folder.findFirst({
+            where: { id: targetParentId, team_id: teamId, is_deleted: false },
+        });
+
+        if (!destination) {
+            throw new AppError(
+                'Destination folder not found or does not belong to this team',
+                404
+            );
+        }
+
+        // 4b. Circular reference guard
+        // Load all folders so we can find descendants in memory (no recursive DB queries)
+        const allFolders = await prisma.folder.findMany({
+            where: { team_id: teamId, is_deleted: false },
+            select: { id: true, parent_folder_id: true },
+        });
+
+        // getAllDescendantIds gives us every folder inside folderId (recursively)
+        const descendantIds = getAllDescendantIds(folderId, allFolders);
+
+        // If the target is one of our descendants → circular reference!
+        if (descendantIds.includes(targetParentId)) {
+            throw new AppError(
+                'Cannot move a folder into its own subfolder — this would create a circular reference',
+                400
+            );
+        }
+    }
+
+    // Step 5: perform the move — update parent_folder_id
+    const updated = await prisma.folder.update({
+        where: { id: folderId },
+        data: { parent_folder_id: targetParentId },
+    });
+
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_moved',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: {
+            folder_name: folder.name,
+            fromParentId: folder.parent_folder_id,
+            toParentId: targetParentId,
+        },
+        ip,
+        userAgent,
+    });
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_MOVED, {
+        folderId: folderId,
+        folderName: folder.name,
+        fromParentId: folder.parent_folder_id,
+        toParentId: targetParentId,
+        movedBy: userId
+    });
+
     return updated;
 }

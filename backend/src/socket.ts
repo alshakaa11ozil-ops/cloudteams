@@ -41,6 +41,7 @@ let io: SocketServer | null = null;
 // ============================================================
 export function initSocket(httpServer: HttpServer): SocketServer {
     io = new SocketServer(httpServer, {
+        destroyUpgrade: false, // CRITICAL: Prevent Socket.io from destroying Hocuspocus upgrades!
         cors: {
             // In production, replace '*' with your frontend domain.
             // '*' is fine for development and graduation project demo.
@@ -150,4 +151,12 @@ export function emitToTeam(
     }
 
     io.to(`team-${teamId}`).emit(event, payload);
+}
+
+export function setIo(newIo: SocketServer): void {
+    io = newIo;
+}
+
+export function getIo(): SocketServer | null {
+    return io;
 }

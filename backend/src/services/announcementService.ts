@@ -2,6 +2,9 @@
 
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // ─────────────────────────────────────────────
 // WHY WE REMOVED LOCAL ERROR CLASSES:
@@ -44,7 +47,7 @@ export async function createAnnouncement(
   // user is not a member or is below the required role level
   await assertTeamMember(authorId, teamId, 'admin');
 
-  return await prisma.announcement.create({
+  const announcement = await prisma.announcement.create({
     data: { teamId, authorId, title, body, isPinned },
     include: {
       author: {
@@ -52,6 +55,23 @@ export async function createAnnouncement(
       },
     },
   });
+
+  void logActivity({
+    teamId,
+    userId: authorId,
+    action: 'announcement_posted',
+    targetType: 'team',
+    targetId: teamId,
+    metadata: { announcementId: announcement.id, title: announcement.title }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.ANNOUNCEMENT_POSTED, {
+    announcement: announcement as unknown as Record<string, unknown>,
+    postedBy: authorId
+  });
+
+  return announcement;
 }
 
 // ============================================================
@@ -144,7 +164,7 @@ export async function updateAnnouncement(
     throw new AppError('You do not have permission to pin or unpin announcements', 403);
   }
 
-  return await prisma.announcement.update({
+  const updated = await prisma.announcement.update({
     where: { id: announcementId },
     data: {
       // Spread each field only if it was actually provided
@@ -159,6 +179,26 @@ export async function updateAnnouncement(
       },
     },
   });
+
+  if (updates.isPinned !== undefined) {
+    void logActivity({
+      teamId,
+      userId: requestingUserId,
+      action: 'announcement_pinned',
+      targetType: 'team',
+      targetId: teamId,
+      metadata: { announcementId: announcementId, isPinned: updates.isPinned }
+    });
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.ANNOUNCEMENT_PINNED, {
+      announcementId: announcementId,
+      isPinned: updates.isPinned,
+      pinnedBy: requestingUserId
+    });
+  }
+
+  return updated;
 }
 
 // ============================================================

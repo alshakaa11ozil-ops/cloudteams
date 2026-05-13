@@ -17,6 +17,7 @@ import prisma from '../config/database';
 import { v4 as uuidv4 } from 'uuid';  // generates cryptographically random UUIDs
 import { emitToTeam } from '../socket';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 // ─── Constants ───────────────────────────────────────────────
 // How long a lease lasts before it auto-expires.
 // 30 minutes is long enough for real editing sessions but short
@@ -42,7 +43,7 @@ export interface LeaseResult {
 // ─── Type returned by getLockStatus ─────────────────────────
 export interface LockStatusResult {
     isLocked: boolean;
-    lockedBy: string | null;       // username of lock owner, or null
+    lockedBy: { id: number; username: string; email: string; } | null;
     lockExpiresAt: Date | null;
     timeRemainingSeconds: number | null;
     editingStartedAt: Date | null;
@@ -113,6 +114,7 @@ export async function acquireLock(
     const result = await prisma.file.updateMany({
         where: {
             id: fileId,
+            team_id: teamId,
             OR: [
                 { lockExpiresAt: null },                    // no lease at all
                 { lockExpiresAt: { lt: new Date() } },      // lease is expired
@@ -141,9 +143,15 @@ export async function acquireLock(
         action: 'lock_acquired',
         targetType: 'file',
         targetId: fileId,
-        metadata: { lockToken, lockExpiresAt, ip, userAgent },
+        metadata: {
+            lockToken,
+            lockExpiresAt,
+            ip,
+            userAgent,
+            file_name: file.original_name // ← Fixes 'item #15' issue
+        },
     });
-    emitToTeam(teamId, 'file.locked', {
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_LOCKED, {
         fileId,
         lockedBy: userId,       // frontend will resolve name from its own state
         lockExpiresAt: lockExpiresAt.toISOString(),
@@ -221,7 +229,9 @@ export async function releaseLock(
     fileId: number,
     lockToken: string,
     userId: number,
-    teamId: number
+    teamId: number,
+    ip: string,       // ← add
+    userAgent: string // ← add
 ): Promise<{ success: true }> {
 
     const result = await prisma.file.updateMany({
@@ -239,9 +249,10 @@ export async function releaseLock(
         },
     });
 
-    if (result.count === 0) {
-        throw new Error('LOCK_NOT_FOUND_OR_NOT_OWNER');
-    }
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId },
+        select: { original_name: true }
+    });
 
     // Audit log — records that this user released the lock voluntarily.
     void logActivity({
@@ -250,9 +261,13 @@ export async function releaseLock(
         action: 'lock_released',
         targetType: 'file',
         targetId: fileId,
-        metadata: { ip: 'N/A', userAgent: 'N/A' },
+        metadata: {
+            ip,
+            userAgent,
+            file_name: file?.original_name || 'unknown'
+        },
     });
-    emitToTeam(teamId, 'file.unlocked', { fileId });
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_UNLOCKED, { fileId, unlockedBy: userId });
     return { success: true };
 }
 
@@ -285,7 +300,7 @@ export async function getLockStatus(
             editingStartedAt: true,
             // join to users table to get the username
             lockOwner: {
-                select: { username: true },
+                select: { id: true, username: true, email: true },
             },
         },
     });
@@ -319,7 +334,7 @@ export async function getLockStatus(
 
     return {
         isLocked: true,
-        lockedBy: file.lockOwner?.username ?? null,
+        lockedBy: file.lockOwner ?? null,
         lockExpiresAt: file.lockExpiresAt,
         timeRemainingSeconds,
         editingStartedAt: file.editingStartedAt,
@@ -371,17 +386,27 @@ export async function forceUnlock(
         throw new Error('FILE_NOT_FOUND');
     }
 
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId },
+        select: { original_name: true }
+    });
+
     // Audit log — action is 'forced_unlock' (distinct from 'lock_released')
     // so we can filter admin overrides separately in the activity feed.
     void logActivity({
         teamId,
         userId: adminUserId,
-        action: 'forced_unlock',
+        action: 'lock_force_released',
         targetType: 'file',
         targetId: fileId,
-        metadata: { ip, userAgent, performedBy: adminUserId },
+        metadata: {
+            ip,
+            userAgent,
+            performedBy: adminUserId,
+            file_name: file?.original_name || 'unknown'
+        },
     });
     // Admin broke the lock — notify team so UI updates.
-    emitToTeam(teamId, 'file.unlocked', { fileId, forcedBy: adminUserId });
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_UNLOCKED, { fileId, forcedBy: adminUserId, unlockedBy: adminUserId });
     return { success: true };
 }

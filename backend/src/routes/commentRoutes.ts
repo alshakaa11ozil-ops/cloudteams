@@ -12,6 +12,14 @@ router.get('/:teamId/files/:fileId/comments', authenticate, listCommentsHandler)
 // Add a new comment to a file
 router.post('/:teamId/files/:fileId/comments', authenticate, addCommentHandler);
 
+// GET /api/teams/:teamId/documents/:documentId/comments
+// List all comments for a document
+router.get('/:teamId/documents/:documentId/comments', authenticate, listCommentsHandler);
+
+// POST /api/teams/:teamId/documents/:documentId/comments
+// Add a new comment to a document
+router.post('/:teamId/documents/:documentId/comments', authenticate, addCommentHandler);
+
 // PATCH /api/teams/:teamId/comments/:commentId
 // Edit comment text or resolve status
 router.patch('/:teamId/comments/:commentId', authenticate, editCommentHandler);

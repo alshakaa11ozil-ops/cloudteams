@@ -59,6 +59,42 @@ export function startCronJobs(): void {
     });
 
     console.log('[Cron] Stale lock cleanup job scheduled (every 30 minutes)');
+
+    // ── Job 2: Clean Expired JWT Blacklist Tokens ─────────────
+    // CRON SYNTAX: '0 * * * *' = top of every hour
+    //   0  → at minute 0
+    //   *  → every hour
+    //   *  → every day of month
+    //   *  → every month
+    //   *  → every day of week
+    //
+    // WHY HOURLY: JWT tokens live 7 days. Hourly cleanup is more
+    // than sufficient to keep the blacklist table small.
+    // WHY DELETE: An expired token is already rejected by jwt.verify()
+    // before the blacklist check — so these rows are dead weight.
+    // Deleting them keeps the findUnique lookup fast.
+    cron.schedule('0 * * * *', async () => {
+        try {
+            const result = await prisma.tokenBlacklist.deleteMany({
+                where: {
+                    // expires_at < NOW() means the JWT's own expiry has passed.
+                    // jwt.verify() would already reject these tokens anyway.
+                    // Safe to delete — they can never be used again regardless.
+                    expires_at: { lt: new Date() },
+                },
+            });
+
+            // Only log if something was deleted — reduces log noise
+            if (result.count > 0) {
+                console.log(`[Cron] Cleaned ${result.count} expired blacklist token(s)`);
+            }
+        } catch (error) {
+            // Never let a cron failure crash the server — just log and continue
+            console.error('[Cron] Blacklist cleanup failed:', error);
+        }
+    });
+
+    console.log('[Cron] Blacklist token cleanup job scheduled (every hour)');
 }
 
 // ============================================================

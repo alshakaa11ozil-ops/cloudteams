@@ -76,7 +76,7 @@ router.get(
 router.post(
     '/force-unlock',
     authenticate,
-
+    requireRole('admin'),
     LockController.forceUnlock
 );
 

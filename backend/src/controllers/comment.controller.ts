@@ -8,16 +8,17 @@ import { AppError } from '../utils/teamGuard';
 export const addCommentHandler = async (req: Request, res: Response): Promise<void> => {
     try {
         const teamId = parseInt(req.params.teamId as string, 10);
-        const fileId = parseInt(req.params.fileId as string, 10);
+        const fileId = req.params.fileId ? parseInt(req.params.fileId as string, 10) : undefined;
+        const documentId = req.params.documentId ? parseInt(req.params.documentId as string, 10) : undefined;
         const content = req.body.content as string;
         const userId = req.user!.userId;
 
-        if (isNaN(teamId) || isNaN(fileId) || !content) {
+        if (isNaN(teamId) || (fileId === undefined && documentId === undefined) || !content) {
             res.status(400).json({ error: 'Invalid parameters or missing content' });
             return;
         }
 
-        const comment = await addComment(fileId, teamId, userId, content);
+        const comment = await addComment(teamId, userId, content, fileId, documentId);
         res.status(201).json({ message: 'Comment created successfully', comment });
     } catch (error) {
         if (error instanceof AppError) {
@@ -35,15 +36,16 @@ export const addCommentHandler = async (req: Request, res: Response): Promise<vo
 export const listCommentsHandler = async (req: Request, res: Response): Promise<void> => {
     try {
         const teamId = parseInt(req.params.teamId as string, 10);
-        const fileId = parseInt(req.params.fileId as string, 10);
+        const fileId = req.params.fileId ? parseInt(req.params.fileId as string, 10) : undefined;
+        const documentId = req.params.documentId ? parseInt(req.params.documentId as string, 10) : undefined;
         const userId = req.user!.userId;
 
-        if (isNaN(teamId) || isNaN(fileId)) {
+        if (isNaN(teamId) || (fileId === undefined && documentId === undefined)) {
             res.status(400).json({ error: 'Invalid exact ID parameters' });
             return;
         }
 
-        const comments = await listComments(fileId, teamId, userId);
+        const comments = await listComments(teamId, userId, fileId, documentId);
         res.status(200).json({ comments });
     } catch (error) {
         if (error instanceof AppError) {

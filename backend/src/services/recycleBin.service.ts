@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
+import { logActivity, ActivityAction } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
+import { DocumentSummary } from './document.service';
 
 /**
  * List all soft-deleted files for a team.
@@ -29,23 +33,46 @@ export const listDeletedFiles = async (teamId: number, userId: number) => {
 
     return files;
 };
+export const listDeletedDocuments = async (teamId: number, userId: number): Promise<DocumentSummary[]> => {
+    await assertTeamMember(userId, teamId, 'viewer');
+    const docs = await prisma.document.findMany({
+        where: { team_id: teamId, is_deleted: true },
+        include: { creator: { select: { id: true, username: true, email: true, full_name: true } } },
+        orderBy: { deleted_at: 'desc' },
+    });
+
+    return docs.map(d => ({
+        id: d.id,
+        title: d.title,
+        folderId: d.folder_id,
+        createdBy: d.created_by,
+        creatorName: d.creator.full_name ?? d.creator.username ?? null,
+        lastSaved: d.last_saved,
+        createdAt: d.created_at,
+        updatedAt: d.updated_at,
+        deletedAt: d.deleted_at,
+    }));
+};
+
 /**
- * Unified View: Return ALL deleted files and folders for the team.
+ * Unified View: Return ALL deleted files, documents, and folders for the team.
  * @param teamId Team ID
  * @param userId Requesting user ID
  */
 export const getUnifiedRecycleBin = async (teamId: number, userId: number) => {
     await assertTeamMember(userId, teamId, 'viewer');
 
-    const [files, folders] = await Promise.all([
+    const [files, folders, documents] = await Promise.all([
         listDeletedFiles(teamId, userId),
-        listDeletedFolders(teamId, userId)
+        listDeletedFolders(teamId, userId),
+        listDeletedDocuments(teamId, userId)
     ]);
 
     return {
         files,
         folders,
-        total: files.length + folders.length
+        documents,
+        total: files.length + folders.length + documents.length
     };
 };
 
@@ -55,7 +82,13 @@ export const getUnifiedRecycleBin = async (teamId: number, userId: number) => {
  * @param teamId Team ID the file belongs to
  * @param userId Requesting user ID
  */
-export const restoreFile = async (fileId: number, teamId: number, userId: number) => {
+export const restoreFile = async (
+    fileId: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
     // Only editors/admins can restore a file
     await assertTeamMember(userId, teamId, 'editor');
 
@@ -84,7 +117,83 @@ export const restoreFile = async (fileId: number, teamId: number, userId: number
         },
     });
 
+    // Audit: fire-and-forget — log that this user restored the file from the bin.
+    // metadata includes whether it landed back in its original folder or was orphaned to root.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_restored',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            file_name: file.original_name,
+            restoredToFolderId: finalFolderId,            // null = root level
+            orphanedToRoot: finalFolderId !== file.folder_id, // true if parent was deleted
+        },
+        ip,
+        userAgent,
+    });
+
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_RESTORED, {
+        fileId: fileId,
+        fileName: file.original_name,
+        restoredBy: userId
+    });
+
     return updatedFile;
+
+};
+
+export const restoreDocument = async (
+    documentId: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
+    // Only editors/admins can restore a document
+    await assertTeamMember(userId, teamId, 'editor');
+
+    const document = await prisma.document.findFirst({
+        where: { id: documentId, team_id: teamId, is_deleted: true },
+        include: { folder: true }
+    });
+
+    if (!document) {
+        throw new AppError('Document not found in recycle bin', 404);
+    }
+
+    let finalFolderId = document.folder_id;
+    if (document.folder && document.folder.is_deleted) {
+        finalFolderId = null;
+    }
+
+    const updatedDocument = await prisma.document.update({
+        where: { id: documentId },
+        data: {
+            is_deleted: false,
+            deleted_at: null,
+            folder_id: finalFolderId,
+        },
+    });
+
+    void logActivity({
+        teamId,
+        userId,
+        action: 'document_restored' as ActivityAction,
+        targetType: 'document',
+        targetId: documentId,
+        metadata: {
+            document_title: document.title,
+            restoredToFolderId: finalFolderId,
+            orphanedToRoot: finalFolderId !== document.folder_id,
+        },
+        ip,
+        userAgent,
+    });
+
+    return updatedDocument;
 };
 
 // ─────────────────────────────────────────────
@@ -166,10 +275,18 @@ export const getDeletedFolderContents = async (folderId: number, teamId: number,
         orderBy: { deleted_at: 'desc' }
     });
 
+    // Get deleted documents
+    const childDocuments = await prisma.document.findMany({
+        where: { team_id: teamId, folder_id: folderId, is_deleted: true },
+        include: { creator: { select: { id: true, username: true, email: true } } },
+        orderBy: { deleted_at: 'desc' }
+    });
+
     return {
         folder: parentFolder,
         folders: childFolders,
-        files: childFiles
+        files: childFiles,
+        documents: childDocuments
     };
 };
 
@@ -179,7 +296,13 @@ export const getDeletedFolderContents = async (folderId: number, teamId: number,
  * @param teamId Team ID the folder belongs to
  * @param userId Requesting user ID
  */
-export const restoreFolder = async (folderId: number, teamId: number, userId: number) => {
+export const restoreFolder = async (
+    folderId: number,
+    teamId: number,
+    userId: number,
+    ip: string,
+    userAgent: string
+) => {
     // Only editors/admins can restore a folder
     await assertTeamMember(userId, teamId, 'editor');
 
@@ -224,6 +347,15 @@ export const restoreFolder = async (folderId: number, teamId: number, userId: nu
             },
             data: { is_deleted: false, deleted_at: null },
         }),
+        // Restore all documents living inside those folders
+        prisma.document.updateMany({
+            where: {
+                team_id: teamId,
+                folder_id: { in: allFolderIdsToRestore },
+                is_deleted: true,
+            },
+            data: { is_deleted: false, deleted_at: null },
+        }),
         // Assign the correct parent to the very top folder we restored
         prisma.folder.update({
             where: { id: folderId },
@@ -231,11 +363,40 @@ export const restoreFolder = async (folderId: number, teamId: number, userId: nu
         })
     ]);
 
-    return {
+    const result = {
         message: 'Folder and contents restored successfully',
         restoredFolders: updatedFolders.count,
-        restoredFiles: updatedFiles.count
+        restoredFiles: updatedFiles.count,
     };
+
+    // Audit: fire-and-forget — records how many folders/files were recovered.
+    // 'folder_restored' is distinct from 'file_restored' so the feed can group them.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_restored',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: {
+            folder_name: folder.name,
+            restoredFolders: updatedFolders.count,
+            restoredFiles: updatedFiles.count,
+            orphanedToRoot: finalParentFolderId !== folder.parent_folder_id, // reparented?
+        },
+        ip,
+        userAgent,
+    });
+
+    // Real-time notification via helper
+    // We send FOLDER_CREATED because the frontend usually treats a restored folder 
+    // as a new addition to the active view.
+    emitToTeam(teamId, SOCKET_EVENTS.FOLDER_CREATED, {
+        folder: updatedRootFolder as unknown as Record<string, unknown>,
+        restoredBy: userId
+    });
+
+    return result;
+
 };
 
 // ─────────────────────────────────────────────
@@ -284,9 +445,73 @@ export const hardDeleteFile = async (fileId: number, teamId: number, userId: num
     // Only admins can permanently delete
     await assertTeamMember(userId, teamId, 'admin');
 
+    // Fetch the file metadata before it is purged from the DB
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: true },
+        select: { original_name: true }
+    });
+
+    if (!file) {
+        throw new AppError('File not found in recycle bin', 404);
+    }
+
     await performHardDeleteFile(fileId, teamId);
 
+    // Audit: permanent deletion is admin-only so we log it for full accountability.
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_deleted',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            file_name: file.original_name,
+            permanent: true
+        },
+    });
+
     return { message: 'File permanently deleted' };
+};
+
+async function performHardDeleteDocument(documentId: number, teamId: number) {
+    const document = await prisma.document.findFirst({
+        where: { id: documentId, team_id: teamId, is_deleted: true }
+    });
+
+    if (!document) {
+        throw new AppError('Document not found in recycle bin', 404);
+    }
+
+    await prisma.document.delete({ where: { id: documentId } });
+}
+
+export const hardDeleteDocument = async (documentId: number, teamId: number, userId: number) => {
+    await assertTeamMember(userId, teamId, 'admin');
+
+    const document = await prisma.document.findFirst({
+        where: { id: documentId, team_id: teamId, is_deleted: true },
+        select: { title: true }
+    });
+
+    if (!document) {
+        throw new AppError('Document not found in recycle bin', 404);
+    }
+
+    await performHardDeleteDocument(documentId, teamId);
+
+    void logActivity({
+        teamId,
+        userId,
+        action: 'document_deleted' as ActivityAction,
+        targetType: 'document',
+        targetId: documentId,
+        metadata: {
+            document_title: document.title,
+            permanent: true
+        },
+    });
+
+    return { message: 'Document permanently deleted' };
 };
 
 /**
@@ -320,10 +545,18 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
         select: { id: true }
     });
 
-    // 1. Hard delete all files (which handles physical unlinking securely)
-    // We use the helper to avoid re-checking permissions inside the loop.
+    // Get all documents inside these folders
+    const documentsToDelete = await prisma.document.findMany({
+        where: { team_id: teamId, folder_id: { in: folderIdsToDelete }, is_deleted: true },
+        select: { id: true }
+    });
+
+    // 1. Hard delete all files and documents
     for (const fileRecord of filesToDelete) {
         await performHardDeleteFile(fileRecord.id, teamId);
+    }
+    for (const docRecord of documentsToDelete) {
+        await performHardDeleteDocument(docRecord.id, teamId);
     }
 
     // 2. Hard delete the folders from the DB
@@ -331,10 +564,26 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
         where: { id: { in: folderIdsToDelete } }
     });
 
+    // Audit log
+    void logActivity({
+        teamId,
+        userId,
+        action: 'folder_deleted',
+        targetType: 'folder',
+        targetId: folderId,
+        metadata: {
+            folder_name: folder.name,
+            permanent: true,
+            deletedFolders: deletedFolders.count,
+            deletedFiles: filesToDelete.length
+        },
+    });
+
     return {
         message: 'Folder hierarchy permanently deleted',
         deletedFolders: deletedFolders.count,
-        deletedFiles: filesToDelete.length
+        deletedFiles: filesToDelete.length,
+        deletedDocuments: documentsToDelete.length
     };
 };
 
@@ -355,9 +604,33 @@ export const emptyRecycleBin = async (teamId: number, userId: number) => {
         await performHardDeleteFile(file.id, teamId);
     }
 
+    const allDeletedDocuments = await prisma.document.findMany({
+        where: { team_id: teamId, is_deleted: true },
+        select: { id: true }
+    });
+
+    for (const doc of allDeletedDocuments) {
+        await performHardDeleteDocument(doc.id, teamId);
+    }
+
     // Now permanently delete ALL deleted folders for the team
     const deletedFolders = await prisma.folder.deleteMany({
         where: { team_id: teamId, is_deleted: true }
+    });
+
+    // Audit log
+    void logActivity({
+        teamId,
+        userId,
+        action: 'file_deleted',
+        targetType: 'file',
+        targetId: 0, // 0 for bulk action
+        metadata: {
+            action_name: 'Empty Recycle Bin',
+            deletedFiles: allDeletedFiles.length,
+            deletedFolders: deletedFolders.count,
+            permanent: true
+        },
     });
 
     return {

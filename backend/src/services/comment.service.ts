@@ -1,6 +1,8 @@
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 /**
  * MENTION_REGEX: Looks for the '@' symbol followed by alphanumeric characters.
  * Example matches: "@alice", "@john_doe123"
@@ -8,25 +10,35 @@ import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activi
 const MENTION_REGEX = /@(\w+)/g;
 
 /**
- * Add a new comment to a file and parse any @mentions to create Activity Logs.
+ * Add a new comment to a file or document and parse any @mentions to create Activity Logs.
  */
-export const addComment = async (fileId: number, teamId: number, userId: number, content: string) => {
+export const addComment = async (teamId: number, userId: number, content: string, fileId?: number, documentId?: number) => {
     // 1. Verify user is at least a viewer in the team
     await assertTeamMember(userId, teamId, 'viewer');
 
-    // 2. Validate the file exists, belongs to the team, and is not deleted
-    const file = await prisma.file.findFirst({
-        where: { id: fileId, team_id: teamId, is_deleted: false }
-    });
-
-    if (!file) {
-        throw new AppError('File not found or deleted', 404);
+    // 2. Validate the file or document exists, belongs to the team, and is not deleted
+    let itemName = '';
+    if (fileId) {
+        const file = await prisma.file.findFirst({
+            where: { id: fileId, team_id: teamId, is_deleted: false }
+        });
+        if (!file) throw new AppError('File not found or deleted', 404);
+        itemName = file.original_name;
+    } else if (documentId) {
+        const doc = await prisma.document.findFirst({
+            where: { id: documentId, team_id: teamId, is_deleted: false }
+        });
+        if (!doc) throw new AppError('Document not found or deleted', 404);
+        itemName = doc.title;
+    } else {
+        throw new AppError('Must provide either fileId or documentId', 400);
     }
 
     // 3. Create the Comment record
     const comment = await prisma.comment.create({
         data: {
             file_id: fileId,
+            document_id: documentId,
             team_id: teamId,
             user_id: userId,
             content
@@ -36,10 +48,15 @@ export const addComment = async (fileId: number, teamId: number, userId: number,
     void logActivity({
         teamId,
         userId,
-        action: 'comment_added',
+        action: 'comment_created',
         targetType: 'comment',
         targetId: comment.id,
-        metadata: { fileId, preview: content.slice(0, 100) },
+        metadata: {
+            fileId,
+            documentId,
+            file_name: itemName, // ← Added for feed visibility (or document title)
+            preview: content.slice(0, 100)
+        },
     });
     // 4. Parse @Mentions out of the text content
     // content.matchAll returns an iterable of all regex matches
@@ -89,7 +106,7 @@ export const addComment = async (fileId: number, teamId: number, userId: number,
             const logsToCreate = validMentionedUsers.map(mentionedUser => ({
                 team_id: teamId,
                 user_id: userId, // the 'author' of the mention
-                action: 'user.mentioned',
+                action: 'user_mentioned' as const,
                 target_type: 'comment',
                 target_id: comment.id,
                 metadata: { mentioned_user_id: mentionedUser.id, mentioned_username: mentionedUser.username },
@@ -102,20 +119,40 @@ export const addComment = async (fileId: number, teamId: number, userId: number,
         }
     }
 
+    // Real-time notification via helper
+    emitToTeam(teamId, SOCKET_EVENTS.COMMENT_CREATED, {
+        comment: comment as unknown as Record<string, unknown>,
+        fileId: fileId,
+        documentId: documentId,
+        authorId: userId
+    });
+
     return comment;
 };
 
 /**
- * List all non-deleted comments for a specific file.
+ * List all non-deleted comments for a specific file or document.
  * Returns them ordered oldest-first to form a natural reading thread.
  */
-export const listComments = async (fileId: number, teamId: number, userId: number) => {
+export const listComments = async (teamId: number, userId: number, fileId?: number, documentId?: number) => {
     await assertTeamMember(userId, teamId, 'viewer');
 
     return await prisma.comment.findMany({
-        where: { file_id: fileId, team_id: teamId, is_deleted: false },
+        where: { 
+            team_id: teamId, 
+            is_deleted: false,
+            ...(fileId ? { file_id: fileId } : {}),
+            ...(documentId ? { document_id: documentId } : {})
+        },
         include: {
-            user: { select: { id: true, username: true, email: true } }
+            user: {
+                select: {
+                    id: true,
+                    username: true,
+                    email: true,
+                    full_name: true,
+                }
+            }
         },
         orderBy: { created_at: 'asc' } // Oldest top, newest bottom
     });
@@ -161,10 +198,23 @@ export const editComment = async (commentId: number, teamId: number, userId: num
         return comment; // Nothing to do
     }
 
-    return await prisma.comment.update({
+    const updated = await prisma.comment.update({
         where: { id: commentId },
         data: updatedData
     });
+
+    if (resolved !== undefined) {
+        // Real-time notification via helper
+        emitToTeam(teamId, SOCKET_EVENTS.COMMENT_RESOLVED, {
+            commentId: commentId,
+            fileId: comment.file_id,
+            documentId: comment.document_id,
+            resolved: resolved,
+            resolvedBy: userId
+        });
+    }
+
+    return updated;
 };
 
 /**

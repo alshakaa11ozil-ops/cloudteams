@@ -13,6 +13,8 @@ import {
   loginUser,
   getUserById,
 } from '../services/auth.service';
+import prisma from '../config/database'
+import bcrypt from 'bcrypt'
 
 // ─── Register ─────────────────────────────────────────────────
 
@@ -66,10 +68,10 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     // ── Step 4: Send success response ───────────────────────
     // WHY 201: HTTP 201 = "Created" — a new resource was created
     //   (vs 200 = "OK" which means something already existed)
+    // We spread ...result to include requiresTwoFactor, tempToken, and twoFactorSetup
     res.status(201).json({
       message: 'Account created successfully',
-      token: result.token,
-      user: result.user,
+      ...result,
     });
 
   } catch (error: any) {
@@ -194,3 +196,107 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
     });
   }
 };
+// PURPOSE: Update the current user's username/display name
+// INPUTS:  req.body.username — new username
+// OUTPUTS: Updated user object
+// REPLACE your existing updateProfileHandler with this expanded version:
+
+export const updateProfileHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId
+    const { username, full_name, job_title } = req.body
+
+    // Validate username if provided
+    if (username !== undefined) {
+      if (!username.trim()) {
+        res.status(400).json({ error: 'Username cannot be empty' })
+        return
+      }
+      // Check not taken by someone else
+      const existing = await prisma.user.findFirst({
+        where: { username: username.trim(), NOT: { id: userId } }
+      })
+      if (existing) {
+        res.status(409).json({ error: 'Username already taken' })
+        return
+      }
+    }
+
+    // Build update object — only include fields that were sent
+    // WHY PARTIAL UPDATE: Don't overwrite full_name if user only changed username
+    const updateData: Record<string, unknown> = {}
+    if (username !== undefined) updateData.username = username?.trim() || undefined
+    if (full_name !== undefined) updateData.full_name = full_name ? full_name.trim() : null
+    if (job_title !== undefined) updateData.job_title = job_title ? job_title.trim() : null
+
+    if (Object.keys(updateData).length === 0) {
+      res.status(400).json({ error: 'No fields to update' })
+      return
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        full_name: true,
+        job_title: true,
+        avatar_color: true,
+        created_at: true
+      }
+    })
+
+    res.json({ user: updated })
+  } catch (err) {
+    console.error('[updateProfileHandler]', err)
+    res.status(500).json({ error: 'Failed to update profile' })
+  }
+}
+
+// PURPOSE: Change the current user's password
+// INPUTS:  req.body.currentPassword, req.body.newPassword
+// OUTPUTS: Success message
+// WHY REQUIRE CURRENT PASSWORD: Prevents account takeover if someone
+//   leaves their session open — attacker can't change password without
+//   knowing the current one.
+export const changePasswordHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId
+    const { currentPassword, newPassword } = req.body
+
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: 'Both current and new password are required' })
+      return
+    }
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: 'New password must be at least 8 characters' })
+      return
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) {
+      res.status(404).json({ error: 'User not found' })
+      return
+    }
+
+    // Verify current password before allowing change
+    const isValid = await bcrypt.compare(currentPassword, user.password_hash)
+    if (!isValid) {
+      res.status(401).json({ error: 'Current password is incorrect' })
+      return
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10)
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password_hash: newHash }
+    })
+
+    res.json({ message: 'Password changed successfully' })
+  } catch (err) {
+    console.error('[changePasswordHandler]', err)
+    res.status(500).json({ error: 'Failed to change password' })
+  }
+}

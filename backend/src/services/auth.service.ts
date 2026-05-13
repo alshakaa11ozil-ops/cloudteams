@@ -7,8 +7,10 @@ import bcrypt from 'bcrypt';
 import prisma from '../config/database';
 import { signToken } from '../utils/jwt';
 import { issueTempToken } from './twoFactor.service';
-
-
+import jwt from 'jsonwebtoken';
+import { assertTeamMember, AppError } from '../utils/teamGuard';
+import * as speakeasy from 'speakeasy'
+import * as QRCode from 'qrcode'
 // ─── Types ────────────────────────────────────────────────────
 
 // What the register endpoint expects from the request body
@@ -27,15 +29,24 @@ export interface LoginInput {
 // What we return to the client after successful auth
 // WHY OMIT PASSWORD: Never send the password hash to the client
 export interface AuthResult {
-  token: string;
-  user: {
+  token?: string;
+  user?: {
     id: number;
     name: string;
+    username: string;
     email: string;
+    full_name?: string | null;
+    job_title?: string | null;
+    avatar_color?: string | null;
     createdAt: Date;
   };
   requiresTwoFactor?: boolean;
   tempToken?: string;
+  // NEW: Added to allow returning 2FA setup data during registration OR login recovery
+  twoFactorSetup?: {
+    qrCode: string;
+    secret: string;
+  };
 }
 
 // ─── Register ─────────────────────────────────────────────────
@@ -76,6 +87,12 @@ export const registerUser = async (input: RegisterInput): Promise<AuthResult> =>
   const saltRounds = 10;
   const passwordHash = await bcrypt.hash(input.password, saltRounds);
 
+
+  // Generate 2FA secret at registration — every account has 2FA from day one
+  const twoFactorSecret = speakeasy.generateSecret({
+    name: `CloudTeams (${input.email})`,  // shown in Google Authenticator
+    length: 20,
+  })
   // ── Step 3: Create user in database ───────────────────────
   // WHY LOWERCASE EMAIL: Prevents duplicate accounts from
   //   "Alice@email.com" vs "alice@email.com"
@@ -84,25 +101,38 @@ export const registerUser = async (input: RegisterInput): Promise<AuthResult> =>
       username: input.name.trim(),
       email: input.email.toLowerCase().trim(),
       password_hash: passwordHash,
+      two_factor_secret: twoFactorSecret.base32,
+      two_factor_confirmed: false, // Mandatory setup pending
     },
-  });
+  })
 
-  // ── Step 4: Sign JWT token ─────────────────────────────────
-  // WHY SIGN IMMEDIATELY: User is considered logged in right after
-  //   registering — no need to force them to log in again
-  const token = signToken({ userId: user.id, email: user.email });
+  // ── Step 4: Sign temp token for 2FA setup ─────────────────
+  // WHY TEMP TOKEN: We don't want to grant full access until 2FA is verified.
+  const tempToken = issueTempToken(user.id, user.email);
+
+  // Generate QR code as a data URL the frontend can show in an <img> tag
+  const qrCodeUrl = await QRCode.toDataURL(twoFactorSecret.otpauth_url ?? '')
 
   return {
-    token,
+    requiresTwoFactor: true,
+    tempToken,
     user: {
       id: user.id,
       name: user.username,
+      username: user.username,
       email: user.email,
+      full_name: user.full_name,
+      job_title: user.job_title,
+      avatar_color: user.avatar_color,
       createdAt: user.created_at,
     },
-  };
-};
-
+    // Return QR code and secret so frontend can show setup screen
+    twoFactorSetup: {
+      qrCode: qrCodeUrl,
+      secret: twoFactorSecret.base32,
+    },
+  }
+}
 // ─── Login ────────────────────────────────────────────────────
 
 // ============================================================
@@ -165,24 +195,44 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
     // The purpose: "2fa_challenge" field prevents it being used elsewhere.
     const tempToken = issueTempToken(user.id, user.email);
 
+    // If 2FA is not confirmed yet (e.g. they abandoned registration),
+    // force them back to the setup page by including setup data.
+    if (!user.two_factor_confirmed) {
+      const qrCodeUrl = await QRCode.toDataURL(
+        `otpauth://totp/CloudTeams (${user.email})?secret=${user.two_factor_secret}&issuer=CloudTeams`
+      );
+
+      return {
+        requiresTwoFactor: true,
+        tempToken,
+        twoFactorSetup: {
+          qrCode: qrCodeUrl,
+          secret: user.two_factor_secret,
+        },
+      } as unknown as AuthResult;
+    }
+
+    // Normal confirmed 2FA challenge
     return {
-      requiresTwoFactor: true,   // tells the client to show the code input screen
-      tempToken,                 // client stores this temporarily
-      // No real token or user data yet — authentication is incomplete
+      requiresTwoFactor: true,
+      tempToken,
     } as unknown as AuthResult;
   }
 
   // ── Step 4: No 2FA — issue real JWT immediately (existing flow) ──
   const token = signToken({ userId: user.id, email: user.email });
 
+  // Update last_login timestamp
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { last_login: new Date() }
+  });
+
+  const fullUser = await getUserById(user.id)
+
   return {
     token,
-    user: {
-      id: user.id,
-      name: user.username,
-      email: user.email,
-      createdAt: user.created_at,
-    },
+    user: fullUser,
   };
 };
 
@@ -194,27 +244,92 @@ export const loginUser = async (input: LoginInput): Promise<AuthResult> => {
 // INPUTS: userId (number) from the JWT payload
 // OUTPUTS: user object without password hash
 // ============================================================
-export const getUserById = async (userId: number) => {
+// In auth.service.ts — find getUserById and update the select:
 
+export async function getUserById(userId: number) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    // SELECT only safe fields — never return password_hash
     select: {
       id: true,
       username: true,
       email: true,
+      full_name: true,
+      job_title: true,
+      avatar_color: true,
       created_at: true,
-    },
-  });
+      // WHY INCLUDE THIS: Frontend needs to know if 2FA is active
+      // to show the correct UI state in UserSettings.
+      // We return a boolean — NEVER the secret itself.
+      two_factor_confirmed: true,
+    }
+  })
 
-  if (!user) {
-    throw new Error('USER_NOT_FOUND');
-  }
+  if (!user) throw new Error('USER_NOT_FOUND')
 
   return {
-    id: user.id,
+    ...user,
     name: user.username,
-    email: user.email,
     createdAt: user.created_at,
-  };
-};
+    twoFactorEnabled: user.two_factor_confirmed ?? false,
+
+  }
+}
+
+
+// ===========================================================================
+// FUNCTION: logout
+// ===========================================================================
+// PURPOSE: Invalidates a JWT token by inserting it into the blacklist table.
+//          Even though the token remains cryptographically valid, the
+//          authenticate middleware will reject it on every future request.
+//
+// INPUTS:  authHeader — the raw "Authorization" header value (e.g. "Bearer eyJ...")
+// OUTPUTS: void — throws AppError if header is malformed
+//
+// WHY THIS APPROACH:
+//   JWT is stateless by design. The only way to revoke a specific token before
+//   its expiry is to maintain a server-side blacklist and check it on every
+//   request. We store only the token + its expiry so the cron job can clean
+//   up rows that are no longer needed (expired tokens are harmless).
+// ===========================================================================
+export async function logout(authHeader: string | undefined): Promise<void> {
+  // Guard: header must exist and follow "Bearer <token>" format
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new AppError('No token provided', 400);
+  }
+
+  // Extract just the token string after "Bearer "
+  const token = authHeader.substring(7); // "Bearer " is 7 characters
+
+  // jwt.decode() reads the payload WITHOUT verifying the signature.
+  // We don't need to verify here — authenticate middleware already did that.
+  // We only need the 'exp' claim to know when this token naturally expires.
+  const decoded = jwt.decode(token) as { exp?: number } | null;
+
+  if (!decoded || !decoded.exp) {
+    throw new AppError('Invalid token format', 400);
+  }
+
+  // JWT 'exp' is a Unix timestamp in SECONDS.
+  // JavaScript Date() expects MILLISECONDS — multiply by 1000.
+  const expiresAt = new Date(decoded.exp * 1000);
+
+  // Insert into blacklist. If the token is already there (user clicked
+  // logout twice), the UNIQUE constraint fires — we catch and ignore it
+  // because the end result is the same: the token is blacklisted.
+  try {
+    await prisma.tokenBlacklist.create({
+      data: {
+        token,
+        expires_at: expiresAt
+        // created_at is automatic via @default(now())
+      }
+    });
+  } catch (error: any) {
+    // Prisma error code P2002 = unique constraint violation
+    // This means the token was already blacklisted — that's fine, ignore it
+    if (error.code !== 'P2002') {
+      throw error; // Re-throw anything that isn't a duplicate
+    }
+  }
+}

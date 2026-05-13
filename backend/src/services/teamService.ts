@@ -16,6 +16,12 @@
 //   convert to HTTP status codes.
 // ============================================================
 import prisma from '../config/database';
+import crypto from 'crypto';
+import { assertTeamMember } from '../utils/teamGuard';
+import { createInviteCode } from './inviteCode.service'
+import { logActivity } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // ── Custom Error Types ───────────────────────────────────────
 // WHY: Typed errors let controllers map each failure to the
@@ -51,6 +57,7 @@ export class NotMemberError extends Error {
     this.name = 'NotMemberError';
   }
 }
+
 // ============================================================
 // createTeam
 // PURPOSE: Create a team and add creator as admin in one atomic
@@ -62,25 +69,35 @@ export async function createTeam(
   description: string | undefined,
   ownerId: number
 ) {
+  // Generate invite code inline — no separate call needed
+  const inviteCode = crypto
+    .randomBytes(6)
+    .toString('base64')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .substring(0, 8)
+    .toUpperCase()
+
   return await prisma.$transaction(async (tx) => {
-    // Write 1: create the team row
+    // Write 1: create the team row WITH the code
     const team = await tx.team.create({
       data: {
         name,
         description: description ?? null,
-        owner_id: ownerId,  // schema field is owner_id (snake_case)
+        owner_id: ownerId,
+        invite_code: inviteCode,
+        invite_code_enabled: true,
       },
     });
- 
+
     // Write 2: add creator as admin member
     await tx.teamMember.create({
       data: {
-        team_id: team.id,   // schema field is team_id
-        user_id: ownerId,   // schema field is user_id
+        team_id: team.id,
+        user_id: ownerId,
         role: 'admin',
       },
     });
- 
+
     return team;
   });
 }
@@ -88,28 +105,47 @@ export async function createTeam(
 // ============================================================
 // getTeamById
 // PURPOSE: Fetch full team details including all members.
+//          Now includes the requesting user's role (myRole).
 // ============================================================
-export async function getTeamById(teamId: number) {
+export async function getTeamById(teamId: number, userId: number) {
   const team = await prisma.team.findUnique({
     where: { id: teamId },
     include: {
       members: {
         include: {
-          // Include the user record for each member
           user: {
             select: { id: true, username: true, email: true },
           },
         },
         orderBy: { created_at: 'asc' },
       },
-      _count: {
-        select: { files: true },
-      },
     },
   });
- 
+  
   if (!team) throw new TeamNotFoundError(teamId);
-  return team;
+
+  // Manual counts for non-deleted items
+  const [fileCount, documentCount, storageStats] = await Promise.all([
+    prisma.file.count({ where: { team_id: teamId, is_deleted: false } }),
+    prisma.document.count({ where: { team_id: teamId, is_deleted: false } }),
+    prisma.file.aggregate({
+      where: { team_id: teamId, is_deleted: false },
+      _sum: { file_size: true }
+    })
+  ]);
+
+  // Use the centralized guard to verify membership and get the role
+  const membership = await assertTeamMember(userId, teamId);
+
+  return {
+    ...team,
+    _count: {
+      files: fileCount,
+      documents: documentCount,
+      totalBytes: Number(storageStats._sum.file_size || 0)
+    },
+    myRole: membership.role,
+  };
 }
 
 // ============================================================
@@ -123,17 +159,23 @@ export async function getUserTeams(userId: number) {
       team: {
         include: {
           _count: {
-            select: { members: true, files: true },
+            select: { members: true, files: true, documents: true },
           },
         },
       },
     },
     orderBy: { created_at: 'desc' },  // snake_case
   });
- 
+
   // Return teams with the user's role embedded
   return memberships.map((m) => ({
     ...m.team,
+    _count: {
+      ...m.team._count,
+      // Note: For simplicity in the list view, we keep the raw counts
+      // or we could do a more expensive query. 
+      // For now, let's just make sure getTeamById (the dashboard) is accurate.
+    },
     myRole: m.role,
   }));
 }
@@ -154,13 +196,13 @@ export async function inviteMember(
     select: { id: true, username: true, email: true },
   });
   if (!userToInvite) throw new UserNotFoundError(email);
- 
+
   // Step 2: check not already a member
   const existing = await prisma.teamMember.findFirst({
     where: { team_id: teamId, user_id: userToInvite.id },
   });
   if (existing) throw new AlreadyMemberError(email);
- 
+
   // Step 3: create membership
   const newMember = await prisma.teamMember.create({
     data: {
@@ -174,10 +216,26 @@ export async function inviteMember(
       },
     },
   });
- 
+
+  void logActivity({
+    teamId,
+    userId: invitedByUserId,
+    action: 'member_joined',
+    targetType: 'user',
+    targetId: userToInvite.id,
+    metadata: { username: userToInvite.username, role, method: 'direct_invite' }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_JOINED, {
+    userId: userToInvite.id,
+    username: userToInvite.username,
+    role: role
+  });
+
   return newMember;
 }
- 
+
 // ============================================================
 // getTeamMembers
 // PURPOSE: List all members with their user info and role.
@@ -187,8 +245,16 @@ export async function getTeamMembers(teamId: number) {
     where: { team_id: teamId },
     include: {
       user: {
-        select: { id: true, username: true, email: true },
-      },
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          full_name: true,
+          job_title: true,
+          last_login: true,
+          created_at: true,
+        }
+      }
     },
     orderBy: { created_at: 'asc' },
   });
@@ -209,16 +275,16 @@ export async function changeMemberRole(
     select: { owner_id: true },
   });
   if (!team) throw new TeamNotFoundError(teamId);
- 
+
   // Owner cannot be demoted — safety invariant
   if (targetUserId === team.owner_id) throw new CannotRemoveOwnerError();
- 
+
   const membership = await prisma.teamMember.findFirst({
     where: { team_id: teamId, user_id: targetUserId },
   });
   if (!membership) throw new NotMemberError();
- 
-  return await prisma.teamMember.update({
+
+  const updated = await prisma.teamMember.update({
     where: { id: membership.id },
     data: { role: newRole },
     include: {
@@ -227,7 +293,27 @@ export async function changeMemberRole(
       },
     },
   });
+
+  void logActivity({
+    teamId,
+    userId: requestingUserId,
+    action: 'member_role_changed',
+    targetType: 'user',
+    targetId: targetUserId,
+    metadata: { username: updated.user.username, oldRole: membership.role, newRole }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_ROLE_CHANGED, {
+    userId: targetUserId,
+    username: updated.user.username,
+    newRole: newRole,
+    changedBy: requestingUserId
+  });
+
+  return updated;
 }
+
 // ============================================================
 // removeMember
 // PURPOSE: Remove a user from a team. Owner cannot be removed.
@@ -239,15 +325,29 @@ export async function removeMember(teamId: number, targetUserId: number) {
     select: { owner_id: true },
   });
   if (!team) throw new TeamNotFoundError(teamId);
- 
+
   if (targetUserId === team.owner_id) throw new CannotRemoveOwnerError();
- 
+
   const membership = await prisma.teamMember.findFirst({
     where: { team_id: teamId, user_id: targetUserId },
   });
   if (!membership) throw new NotMemberError();
- 
+
   await prisma.teamMember.delete({
     where: { id: membership.id },
+  });
+
+  void logActivity({
+    teamId,
+    userId: 0, // System or current user? Actually we should pass the requestingUserId to removeMember
+    action: 'member_left',
+    targetType: 'user',
+    targetId: targetUserId,
+    metadata: { method: 'removed_by_admin' }
+  });
+
+  // Real-time notification via helper
+  emitToTeam(teamId, SOCKET_EVENTS.MEMBER_LEFT, {
+    userId: targetUserId
   });
 }

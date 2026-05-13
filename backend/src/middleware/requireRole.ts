@@ -57,8 +57,7 @@ export function requireRole(minimumRole: 'viewer' | 'editor' | 'admin') {
       // req.user is set by the `authenticate` middleware (Week 3).
       // If it doesn't exist here, authenticate wasn't applied — that's
       // a developer mistake, so we fail loudly.
-      const userId = req.user?.userId;
-      if (!userId) {
+      if (!req.user?.userId) {
         res.status(401).json({ error: 'Not authenticated' });
         return;
       }
@@ -67,6 +66,7 @@ export function requireRole(minimumRole: 'viewer' | 'editor' | 'admin') {
       // e.g., GET /api/teams/42/members → teamId = "42"
       // CORRECT — accept whichever name Express stored it under
       const teamId = parseInt(String(req.params.teamId ?? req.params.id), 10);
+      const userId = Number(req.user?.userId);
 
       // parseInt returns NaN for non-numeric strings — guard against that
       if (isNaN(teamId)) {

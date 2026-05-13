@@ -14,18 +14,36 @@ export type ActivityAction =
     | 'file_uploaded'
     | 'file_downloaded'
     | 'file_moved'
+    | 'folder_moved'
     | 'file_deleted'
+    | 'file_renamed'
+    | 'file_restored'
     | 'folder_created'
     | 'folder_renamed'
     | 'folder_deleted'
+    | 'folder_restored'
     | 'lock_acquired'
     | 'lock_released'
     | 'lock_expired'
-    | 'forced_unlock'
-    | 'comment_added'
-    | 'version_restored';
+    | 'lock_force_released'
+    | 'comment_created'
+    | 'file_version_created'
+    | 'version_restored'
+    | 'link_created'
+    | 'link_revoked'
+    | 'announcement_posted'
+    | 'announcement_pinned'
+    | 'member_joined'
+    | 'member_left'
+    | 'member_role_changed'
+    | 'user_mentioned'
+    | 'document_created'
+    | 'document_renamed'
+    | 'document_moved'
+    | 'document_deleted'
+    | 'document_restored';
 
-export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user';
+export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user' | 'document';
 
 // ============================================================
 // FUNCTION: logActivity

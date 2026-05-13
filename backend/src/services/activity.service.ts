@@ -62,6 +62,7 @@ export interface ActivityEntry {
         id: number;
         username: string;
         email: string;
+        full_name: string | null;
     };
 }
 
@@ -148,6 +149,8 @@ export async function getActivityFeed(
                         id: true,
                         username: true,
                         email: true,
+                        full_name: true,   // ADD
+
                     },
                 },
             },
@@ -170,6 +173,7 @@ export async function getActivityFeed(
             id: log.user.id,
             username: log.user.username,
             email: log.user.email,
+            full_name: log.user.full_name,
         },
     }));
 
