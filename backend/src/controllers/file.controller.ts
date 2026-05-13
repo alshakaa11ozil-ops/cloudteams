@@ -34,7 +34,7 @@ import {
 } from "../services/file.service";
 import multer from "multer"; // imported for MulterError instanceof check.
 import prisma from "../config/database";
-import { File as PrismaFile } from '../generated/prisma';
+import { File as PrismaFile } from '@prisma/client';
 import { AppError, assertTeamMember } from '../utils/teamGuard';
 import { decryptBuffer } from '../utils/fileEncryption';
 

@@ -3,7 +3,7 @@
 // too many database connections and performance problems.
 // This file creates ONE instance and exports it everywhere.
 
-import { PrismaClient } from '../generated/prisma'
+import { PrismaClient } from '@prisma/client'
 
 // Create the single Prisma client instance
 const prisma = new PrismaClient({

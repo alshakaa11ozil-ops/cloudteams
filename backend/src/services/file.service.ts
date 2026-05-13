@@ -25,7 +25,7 @@ import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 import { explainDuplicate } from './AI/duplicateExplain.service';
-import { File as PrismaFile } from '../generated/prisma';
+import { File as PrismaFile } from '@prisma/client';
 import { emitToTeam } from '../socket';
 import { SOCKET_EVENTS } from '../config/socketEvents';
 import { createVersion } from './version.service';
@@ -560,7 +560,7 @@ export async function downloadFileService(fileId: number, userId: number) {
         }
         const encryptedBuffer = Buffer.concat(chunks);
         const decryptedBuffer = decryptBuffer(encryptedBuffer, file.encryption_iv);
-        
+
         // Convert the decrypted buffer back into a stream for the controller
         const decryptedStream = Readable.from(decryptedBuffer);
         return { stream: decryptedStream, file };
@@ -586,7 +586,7 @@ export async function getFileForDownload(fileId: number, teamId: number, userId:
     // if we're in a transitional state. In a full R2 setup, we'd fetch the buffer from R2.
     // However, based on the existing openEditorHandler logic, it expects a storagePath or buffer.
     const absolutePath = path.resolve(file.storage_path);
-    
+
     let buffer: Buffer | null = null;
     let storagePath: string | null = null;
 
@@ -897,7 +897,7 @@ export const getFilePreview = async (
 
     const absolutePath = path.resolve(file.storage_path);
     const existsOnDisk = fs.existsSync(absolutePath);
-    
+
     // If not on disk, we'll try to fetch from R2 later if needed.
     // We don't throw yet because collaborative types don't need the disk file.
 

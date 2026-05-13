@@ -8,7 +8,7 @@
 // =============================================================================
 
 import prisma from '../config/database';
-import { Prisma } from '../generated/prisma';
+import { Prisma } from '@prisma/client';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity } from '../utils/activityLogger';
 

@@ -10,7 +10,7 @@
 // ============================================================
 
 import prisma from '../config/database';
-import { Prisma } from '../../src/generated/prisma';
+import { Prisma } from '@prisma/client';
 
 // ─────────────────────────────────────────────────────────────
 // TYPE: AnalyticsResult
