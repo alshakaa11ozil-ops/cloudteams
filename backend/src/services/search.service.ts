@@ -14,6 +14,11 @@ interface SearchOptions {
     userId: number;
     type: 'files' | 'folders' | 'all';
     since?: Date;
+    mimeType?: string;
+    uploadedBy?: number;
+    folderId?: number | null;
+    sortBy?: 'name' | 'date' | 'size';
+    order?: 'asc' | 'desc';
 }
 
 // ─────────────────────────────────────────────
@@ -38,16 +43,15 @@ export async function searchTeamContent(options: SearchOptions) {
     // if the user doesn't belong to this team
     await assertTeamMember(userId, teamId);
 
-    // Step 2: Validate query is not empty after trimming whitespace
+    // Step 2: Validate query is not empty after trimming whitespace, unless we have filters
     const trimmedQuery = query.trim();
-    if (!trimmedQuery) {
-        throw new AppError('Search query cannot be empty', 400);
+    if (!trimmedQuery && !options.mimeType && !options.uploadedBy && options.folderId === undefined) {
+        // Return empty results if no query and no filters
+        return { query: '', teamId, totalResults: 0, results: [] };
     }
 
-    // Step 3: Run file and folder queries in PARALLEL
-    // WHY: Both queries are independent — no reason to wait for one before
-    // starting the other. Promise.all runs them simultaneously.
-    const [files, folders] = await Promise.all([
+    // Step 3: Run file, folder, and document queries in PARALLEL
+    const [files, folders, documents] = await Promise.all([
 
         // ── FILE SEARCH ────────────────────────────────────────────────
         // Skip entirely if user only wants folders
@@ -61,8 +65,11 @@ export async function searchTeamContent(options: SearchOptions) {
                         contains: trimmedQuery,
                         mode: 'insensitive', // Prisma's way of writing ILIKE
                     },
-                    // Spread date filter only when 'since' was provided
+                    // Spread optional filters
                     ...(since && { created_at: { gte: since } }),
+                    ...(options.mimeType && { mime_type: { contains: options.mimeType } }),
+                    ...(options.uploadedBy && { uploaded_by: options.uploadedBy }),
+                    ...(options.folderId !== undefined && { folder_id: options.folderId }),
                 },
                 select: {
                     id: true,
@@ -80,8 +87,8 @@ export async function searchTeamContent(options: SearchOptions) {
             }),
 
         // ── FOLDER SEARCH ──────────────────────────────────────────────
-        // Skip entirely if user only wants files
-        type === 'files'
+        // Skip entirely if user only wants files or if filtering by mimeType
+        type === 'files' || options.mimeType
             ? Promise.resolve([])
             : prisma.folder.findMany({
                 where: {
@@ -92,6 +99,8 @@ export async function searchTeamContent(options: SearchOptions) {
                         mode: 'insensitive',
                     },
                     ...(since && { created_at: { gte: since } }),
+                    ...(options.uploadedBy && { created_by: options.uploadedBy }),
+                    ...(options.folderId !== undefined && { parent_folder_id: options.folderId }),
                 },
                 select: {
                     id: true,
@@ -101,6 +110,37 @@ export async function searchTeamContent(options: SearchOptions) {
                     created_at: true,
                 },
                 orderBy: { created_at: 'desc' },
+                take: 50,
+            }),
+
+        // ── DOCUMENT SEARCH ────────────────────────────────────────────
+        type === 'folders' || options.mimeType
+            ? Promise.resolve([])
+            : prisma.documents.findMany({
+                where: {
+                    team_id: teamId,
+                    is_deleted: false,
+                    title: {
+                        contains: trimmedQuery,
+                        mode: 'insensitive',
+                    },
+                    ...(since && { created_at: { gte: since } }),
+                    ...(options.uploadedBy && { created_by: options.uploadedBy }),
+                    ...(options.folderId !== undefined && { folder_id: options.folderId }),
+                },
+                select: {
+                    id: true,
+                    title: true,
+                    folder_id: true,
+                    created_by: true,
+                    last_saved: true,
+                    created_at: true,
+                    updated_at: true,
+                    users: {
+                        select: { id: true, username: true, email: true, full_name: true },
+                    },
+                },
+                orderBy: { updated_at: 'desc' },
                 take: 50,
             }),
     ]);
@@ -128,12 +168,36 @@ export async function searchTeamContent(options: SearchOptions) {
         createdAt: folder.created_at,
     }));
 
-    // Step 5: Merge and sort by date — newest first across both types
-    // WHY RE-SORT: Each query is sorted individually, but after merging
-    // files and folders need to be interleaved by date correctly
-    const combined = [...taggedFiles, ...taggedFolders].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    const taggedDocuments = documents.map((doc) => ({
+        resultType: 'document' as const,
+        id: doc.id,
+        title: doc.title,
+        folderId: doc.folder_id,
+        createdBy: doc.created_by,
+        creatorName: doc.creator?.full_name ?? doc.creator?.username ?? doc.creator?.email ?? null,
+        lastSaved: doc.last_saved,
+        createdAt: doc.created_at,
+        updatedAt: doc.updated_at,
+    }));
+
+    // Step 5: Merge and sort dynamically based on sortBy and order
+    const combined = [...taggedFiles, ...taggedFolders, ...taggedDocuments];
+    combined.sort((a, b) => {
+        const orderMult = options.order === 'asc' ? 1 : -1;
+        
+        if (options.sortBy === 'name') {
+            const nameA = a.resultType === 'document' ? a.title : a.name;
+            const nameB = b.resultType === 'document' ? b.title : b.name;
+            return nameA.localeCompare(nameB) * orderMult;
+        } else if (options.sortBy === 'size') {
+            const sizeA = a.resultType === 'file' ? a.fileSize : 0;
+            const sizeB = b.resultType === 'file' ? b.fileSize : 0;
+            return (sizeA - sizeB) * orderMult;
+        } else {
+            // default to 'date'
+            return (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * orderMult;
+        }
+    });
 
     return {
         query: trimmedQuery,

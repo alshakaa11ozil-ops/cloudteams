@@ -5,8 +5,8 @@
 
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchTeam } from '@/api/teams'
-import InviteBox from '@/components/InviteBox'
+import { fetchTeam } from '../api/teams'
+import InviteBox from '../components/InviteBox'
 
 export default function InviteMember() {
     const { id } = useParams<{ id: string }>()

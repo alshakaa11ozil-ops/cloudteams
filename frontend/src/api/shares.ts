@@ -1,6 +1,6 @@
 import api from './axios'
 import publicApi from './publicAxios'
-import { CloudFile, Folder } from '@/types'
+import type { CloudFile, Folder } from '../types'
 
 export interface ShareLinkPayload {
     password?: string
@@ -19,13 +19,14 @@ export interface SharedLink {
 }
 
 export interface ShareMetadata {
-    type: 'file' | 'folder' | 'team'
+    type: 'file' | 'folder' | 'team' | 'document'
     requiresPassword: boolean
     filename?: string
     fileSize?: number
     mimeType?: string
     folderName?: string
     teamName?: string
+    title?: string
 }
 
 export interface SharedContent {
@@ -57,6 +58,23 @@ export async function createFolderShareLink(folderId: number, teamId: number, op
 // Fetch all active share links for a file
 export async function fetchFileShares(fileId: number, teamId: number): Promise<SharedLink[]> {
     const response = await api.get<{ links: SharedLink[] }>(`/files/${fileId}/share`, {
+        params: { teamId }
+    })
+    return response.data.links
+}
+
+// Create a share link for a specific document
+export async function createDocumentShareLink(documentId: number, teamId: number, options: ShareLinkPayload): Promise<SharedLink> {
+    const response = await api.post<{ link: SharedLink }>(`/teams/${teamId}/documents/${documentId}/share`, {
+        teamId,
+        ...options
+    })
+    return response.data.link
+}
+
+// Fetch all active share links for a document
+export async function fetchDocumentShares(documentId: number, teamId: number): Promise<SharedLink[]> {
+    const response = await api.get<{ links: SharedLink[] }>(`/teams/${teamId}/documents/${documentId}/shares`, {
         params: { teamId }
     })
     return response.data.links
@@ -108,3 +126,13 @@ export async function downloadSharedFile(token: string, password?: string, fileI
 
     return { blob: response.data as Blob, filename: fileOriginalName }
 }
+
+// Get the HTML content of a shared document
+export async function getSharedDocumentContent(token: string, password?: string, documentId?: number): Promise<{ html: string; title: string }> {
+    const response = await publicApi.get<{ html: string; title: string }>(`/share/${token}/document`, {
+        headers: password ? { 'x-share-password': password } : {},
+        params: { documentId }
+    })
+    return response.data
+}
+

@@ -268,7 +268,7 @@ export async function previewDocument(req: Request, res: Response): Promise<void
     try {
         await assertTeamMember(userId, teamId, 'viewer')
 
-        const doc = await prisma.document.findFirst({
+        const doc = await prisma.documents.findFirst({
             where: { id: docId, team_id: teamId, is_deleted: false },
             select: { yjs_state: true }
         })
@@ -289,6 +289,94 @@ export async function previewDocument(req: Request, res: Response): Promise<void
         const html = extractHtmlFromYjsState(yjsState)
         res.status(200).json({ html })
     } catch (err: any) {
+        if (err.statusCode) {
+            res.status(err.statusCode).json({ error: err.message })
+            return
+        }
+        throw err
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CONTROLLER: lockDocument
+// ROUTE:   POST /api/teams/:teamId/documents/:docId/lock
+// OUTPUT:  200 { id, lockOwnerUserId, lockExpiresAt }
+// ---------------------------------------------------------------------------
+export async function lockDocument(req: Request, res: Response): Promise<void> {
+    const teamId = parseId(req.params.teamId)
+    const docId = parseId(req.params.docId)
+    const userId = req.user!.userId
+
+    try {
+        await assertTeamMember(userId, teamId, 'editor')
+        const updated = await DocumentService.lockDocument(docId, teamId, userId)
+        res.json(updated)
+    } catch (err: any) {
+        if (err.message === 'DOCUMENT_NOT_FOUND') {
+            res.status(404).json({ error: 'Document not found' })
+            return
+        }
+        if (err.message === 'DOCUMENT_LOCKED') {
+            res.status(409).json({ error: 'Document is already locked by another user' })
+            return
+        }
+        if (err.statusCode) {
+            res.status(err.statusCode).json({ error: err.message })
+            return
+        }
+        throw err
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CONTROLLER: unlockDocument
+// ROUTE:   POST /api/teams/:teamId/documents/:docId/unlock
+// OUTPUT:  200 { id }
+// ---------------------------------------------------------------------------
+export async function unlockDocument(req: Request, res: Response): Promise<void> {
+    const teamId = parseId(req.params.teamId)
+    const docId = parseId(req.params.docId)
+    const userId = req.user!.userId
+
+    try {
+        await assertTeamMember(userId, teamId, 'editor')
+        const updated = await DocumentService.unlockDocument(docId, teamId, userId)
+        res.json(updated)
+    } catch (err: any) {
+        if (err.message === 'DOCUMENT_NOT_FOUND') {
+            res.status(404).json({ error: 'Document not found' })
+            return
+        }
+        if (err.message === 'DOCUMENT_LOCKED_BY_OTHER') {
+            res.status(403).json({ error: 'Cannot unlock document locked by another user' })
+            return
+        }
+        if (err.statusCode) {
+            res.status(err.statusCode).json({ error: err.message })
+            return
+        }
+        throw err
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CONTROLLER: forceUnlockDocument (admin only)
+// ROUTE:   POST /api/teams/:teamId/documents/:docId/force-unlock
+// ---------------------------------------------------------------------------
+export async function forceUnlockDocument(req: Request, res: Response): Promise<void> {
+    const teamId = parseId(req.params.teamId)
+    const docId = parseId(req.params.docId)
+    const userId = req.user!.userId
+
+    try {
+        await assertTeamMember(userId, teamId, 'admin')
+        const updated = await DocumentService.forceUnlockDocument(docId, teamId)
+        res.json({ success: true, ...updated })
+    } catch (err: any) {
+        if (err.message === 'DOCUMENT_NOT_FOUND') {
+            res.status(404).json({ error: 'Document not found' })
+            return
+        }
         if (err.statusCode) {
             res.status(err.statusCode).json({ error: err.message })
             return

@@ -17,8 +17,8 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import socket from '@/api/socket'
-import { SOCKET_EVENTS } from '@/socketEvents'
+import socket from '../api/socket'
+import { SOCKET_EVENTS } from '../socketEvents'
 import { useAuth } from './useAuth'
 
 interface UseTeamSocketOptions {
@@ -135,7 +135,7 @@ export function useTeamSocket({ teamId }: UseTeamSocketOptions) {
             newRole: string
         }) => {
             void queryClient.invalidateQueries({ queryKey: ['team-members', teamId] })
-            
+
             if (changedUserId === user?.id) {
                 toast(`Your role was changed to ${newRole}`, { icon: '🔔', duration: 6000 })
             } else {
@@ -183,6 +183,32 @@ export function useTeamSocket({ teamId }: UseTeamSocketOptions) {
             void queryClient.invalidateQueries({ queryKey: ['comments', fileId] })
         }
 
+        // ── DOCUMENT EVENTS ───────────────────────────────────────────────────
+
+        const onDocumentCreated = ({ createdBy }: { createdBy: number }) => {
+            if (isMe(createdBy)) return
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast('A team member created a new document', { icon: '📝', duration: 3000 })
+        }
+
+        const onDocumentRenamed = ({ renamedBy }: { renamedBy: number }) => {
+            if (isMe(renamedBy)) return
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast('A document was renamed', { icon: '✏️', duration: 3000 })
+        }
+
+        const onDocumentDeleted = ({ deletedBy }: { deletedBy: number }) => {
+            if (isMe(deletedBy)) return
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast('A document was deleted', { icon: '🗑️', duration: 3000 })
+        }
+
+        const onDocumentMoved = ({ movedBy }: { movedBy: number }) => {
+            if (isMe(movedBy)) return
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast('A document was moved', { icon: '📁', duration: 3000 })
+        }
+
         // ── Register all listeners ────────────────────────────────────────────
         socket.on(SOCKET_EVENTS.FILE_UPLOADED, onFileUploaded)
         socket.on(SOCKET_EVENTS.FILE_DELETED, onFileDeleted)
@@ -205,6 +231,10 @@ export function useTeamSocket({ teamId }: UseTeamSocketOptions) {
         socket.on(SOCKET_EVENTS.ANNOUNCEMENT_PINNED, onAnnouncementPinned)
         socket.on(SOCKET_EVENTS.COMMENT_CREATED, onCommentCreated)
         socket.on(SOCKET_EVENTS.COMMENT_RESOLVED, onCommentResolved)
+        socket.on(SOCKET_EVENTS.DOCUMENT_CREATED, onDocumentCreated)
+        socket.on(SOCKET_EVENTS.DOCUMENT_RENAMED, onDocumentRenamed)
+        socket.on(SOCKET_EVENTS.DOCUMENT_DELETED, onDocumentDeleted)
+        socket.on(SOCKET_EVENTS.DOCUMENT_MOVED, onDocumentMoved)
 
         // ── Cleanup ───────────────────────────────────────────────────────────
         return () => {
@@ -229,6 +259,10 @@ export function useTeamSocket({ teamId }: UseTeamSocketOptions) {
             socket.off(SOCKET_EVENTS.ANNOUNCEMENT_PINNED, onAnnouncementPinned)
             socket.off(SOCKET_EVENTS.COMMENT_CREATED, onCommentCreated)
             socket.off(SOCKET_EVENTS.COMMENT_RESOLVED, onCommentResolved)
+            socket.off(SOCKET_EVENTS.DOCUMENT_CREATED, onDocumentCreated)
+            socket.off(SOCKET_EVENTS.DOCUMENT_RENAMED, onDocumentRenamed)
+            socket.off(SOCKET_EVENTS.DOCUMENT_DELETED, onDocumentDeleted)
+            socket.off(SOCKET_EVENTS.DOCUMENT_MOVED, onDocumentMoved)
 
             socket.emit('leave-team', { teamId })
             socket.disconnect()

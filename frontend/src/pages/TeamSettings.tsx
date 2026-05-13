@@ -16,7 +16,7 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '../hooks/useAuth'
 import {
     fetchTeam,
     fetchTeamMembers,
@@ -24,8 +24,8 @@ import {
     updateMemberRole,
     removeMember,
     deleteTeam,
-} from '@/api/teams'
-import type { TeamRole } from '@/types'
+} from '../api/teams'
+import type { TeamRole } from '../types'
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authenticate } from '../middleware/auth.middleware';
-import { getMetadataHandler, getTeamContentHandler, downloadFileHandler, revokeLinkHandler } from '../controllers/share.controller';
+import { getMetadataHandler, getTeamContentHandler, downloadFileHandler, revokeLinkHandler, getSharedDocumentHandler } from '../controllers/share.controller';
 
 const router = Router();
 
@@ -22,6 +22,9 @@ router.get('/:token/content', shareLimiter, getTeamContentHandler);
 
 // POST /api/share/:token/download -> Download a specific file inside the limit
 router.post('/:token/download', shareLimiter, downloadFileHandler);
+
+// GET /api/share/:token/document -> View a specific document inside the limit
+router.get('/:token/document', shareLimiter, getSharedDocumentHandler);
 
 // DELETE /api/share/:token -> Revoke
 router.delete('/:token', authenticate, revokeLinkHandler);

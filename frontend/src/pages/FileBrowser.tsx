@@ -11,26 +11,29 @@
 // WHY URL-DRIVEN NAVIGATION:
 //   Storing current folder in the URL means browser back works for free,
 //   users can bookmark a folder, and sharing the URL takes teammates directly there.
-import { useRef, useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import socket from '@/api/socket'
-import { SOCKET_EVENTS } from '@/socketEvents'
+import socket from '../api/socket'
+import { SOCKET_EVENTS } from '../socketEvents'
 import toast from 'react-hot-toast'
-import { fetchFiles, fetchFolders, deleteFile, deleteFolder, searchFiles, renameFile, renameFolder, moveFile, moveFolder } from '@/api/files'
-import { fetchTeam } from '@/api/teams'
-import { useAuth } from '@/hooks/useAuth'
-import { fetchDocuments, createDocument, deleteDocument, renameDocument, moveDocument } from '@/api/documents'
-import FolderTree from '@/components/FolderTree'
-import FileList from '@/components/FileList'
-import FileUploadZone from '@/components/FileUploadZone'
-import CreateFolderModal from '@/components/CreateFolderModal'
-import MoveModal from '@/components/MoveModal'
-import DeleteFolderDialog from '@/components/DeleteFolderDialog'
-import FileDetailSidebar from '@/components/FileDetailSidebar'
-import DocumentDetailSidebar from '@/components/DocumentDetailSidebar'
-import ShareLinkModal from '@/components/ShareLinkModal'
-import type { CloudFile, Folder, DocumentSummary } from '@/types'
+import { fetchFiles, fetchFolders, deleteFile, deleteFolder, searchFiles, renameFile, renameFolder, moveFile, moveFolder } from '../api/files'
+import { fetchTeam } from '../api/teams'
+
+import { Popover, Transition } from '@headlessui/react'
+import { SparklesIcon } from '@heroicons/react/24/outline'
+import { useAuth } from '../hooks/useAuth'
+import { fetchDocuments, createDocument, deleteDocument, renameDocument, moveDocument } from '../api/documents'
+import FolderTree from '../components/FolderTree'
+import FileList from '../components/FileList'
+import FileUploadZone from '../components/FileUploadZone'
+import CreateFolderModal from '../components/CreateFolderModal'
+import MoveModal from '../components/MoveModal'
+import DeleteFolderDialog from '../components/DeleteFolderDialog'
+import FileDetailSidebar from '../components/FileDetailSidebar'
+import DocumentDetailSidebar from '../components/DocumentDetailSidebar'
+import ShareLinkModal from '../components/ShareLinkModal'
+import type { CloudFile, Folder, DocumentSummary } from '../types'
 
 // ─── HELPER ──────────────────────────────────────────────────────────────────
 // Format raw bytes as human-readable size string.
@@ -85,7 +88,21 @@ export default function FileBrowser() {
   const [searchResults, setSearchResults] = useState<{
     files: CloudFile[]
     folders: Folder[]
+    documents: DocumentSummary[]
   } | null>(null)
+  const [searchOptions, setSearchOptions] = useState<{
+    mimeType?: string;
+    uploadedBy?: number;
+    folderId?: number | null;
+    sortBy: 'name' | 'date' | 'size';
+    order: 'asc' | 'desc';
+    smart?: boolean;
+  }>({
+    sortBy: 'date',
+    order: 'desc',
+    smart: false
+  })
+
 
   const [folderToDelete, setFolderToDelete] = useState<{ id: number; name: string } | null>(null)
   const [docToDelete, setDocToDelete] = useState<{ id: number; title: string } | null>(null)
@@ -105,7 +122,7 @@ export default function FileBrowser() {
   // Documents section state
   const [isCreatingDoc, setIsCreatingDoc] = useState(false)
 
-  const isSearching = searchQuery.trim().length > 0
+  const isSearching = searchResults !== null
 
   // ── Queries ──────────────────────────────────────────────────────────────────
   const foldersQuery = useQuery({
@@ -123,19 +140,57 @@ export default function FileBrowser() {
   })
 
   const filesQuery = useQuery({
-    queryKey: ['files', teamId, folderId],
-    queryFn: () => fetchFiles(teamId, folderId),
+    queryKey: ['files', teamId, folderId, searchOptions],
+    queryFn: () => fetchFiles(teamId, folderId, searchOptions),
     enabled: teamId > 0 && !isSearching,
     staleTime: 10_000,
   })
 
-  // Documents query — native CloudTeams documents in this folder
+  const activeDocFolderId = searchOptions.folderId !== undefined ? searchOptions.folderId : folderId
+
+  // Documents query — native CloudTeams documents in this folder (or all if activeDocFolderId is undefined)
   const documentsQuery = useQuery({
-    queryKey: ['documents', teamId, folderId],
-    queryFn: () => fetchDocuments(String(teamId), folderId === null ? 'null' : String(folderId)),
+    queryKey: ['documents', teamId, activeDocFolderId],
+    queryFn: () => fetchDocuments(
+      String(teamId), 
+      activeDocFolderId === null ? 'null' : (activeDocFolderId === undefined ? undefined : String(activeDocFolderId))
+    ),
     enabled: teamId > 0 && !isSearching,
     staleTime: 30_000,
   })
+
+  // Memoize document processing so they respect UI filters and sorts
+  const processedDocuments = useMemo(() => {
+    if (!documentsQuery.data) return []
+    let docs = [...documentsQuery.data]
+
+    // 1. Filter out documents if the user is looking for a specific file MIME type
+    if (searchOptions.mimeType) {
+       return []
+    }
+
+    // 2. Filter by uploader
+    if (searchOptions.uploadedBy) {
+       docs = docs.filter(doc => doc.createdBy === searchOptions.uploadedBy)
+    }
+
+    // 3. Sort
+    docs.sort((a, b) => {
+      const orderMult = searchOptions.order === 'asc' ? 1 : -1
+      if (searchOptions.sortBy === 'name') {
+        return a.title.localeCompare(b.title) * orderMult
+      }
+      if (searchOptions.sortBy === 'size') {
+        return 0 // Documents don't have a file size metric here
+      }
+      // Default to date
+      const dateA = new Date(a.createdAt).getTime()
+      const dateB = new Date(b.createdAt).getTime()
+      return (dateA - dateB) * orderMult
+    })
+
+    return docs
+  }, [documentsQuery.data, searchOptions])
 
   // ── Mutations ────────────────────────────────────────────────────────────────
   const deleteFileMutation = useMutation({
@@ -279,23 +334,25 @@ export default function FileBrowser() {
   }
 
   // ── Search ───────────────────────────────────────────────────────────────────
-  // Called on every keystroke — debounce kept simple (no extra library needed)
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const handleSearch = (q: string) => {
-    setSearchQuery(q)
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-    if (!q.trim()) { setSearchResults(null); return }
-
-    searchTimerRef.current = setTimeout(async () => {
-      try {
-        const results = await searchFiles(teamId, q)
-        setSearchResults(results)
-      } catch {
-        setSearchResults({ files: [], folders: [] })
-      }
-    }, 350)  // wait 350ms after last keystroke before firing
+  const executeSearch = async (q: string, options = searchOptions) => {
+    if (!q.trim()) {
+      setSearchResults(null)
+      return
+    }
+    try {
+      const results = await searchFiles(teamId, q, options)
+      setSearchResults(results)
+    } catch {
+      setSearchResults({ files: [], folders: [], documents: [] })
+    }
   }
+
+  // Re-trigger search when filters change
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      executeSearch(searchQuery, searchOptions)
+    }
+  }, [searchOptions])
   // ── Folder navigation ────────────────────────────────────────────────────────
   const goToFolder = (targetId: number | null) => {
     // Clear search when navigating to a folder
@@ -318,6 +375,10 @@ export default function FileBrowser() {
   const extraFolders = isSearching && searchResults
     ? searchResults.folders
     : (foldersQuery.data?.filter(f => f.parent_folder_id === folderId) ?? [])
+
+  const documentsToShow = isSearching && searchResults
+    ? searchResults.documents
+    : processedDocuments
 
   // ── Real-time Updates (Collaboration) ───────────────────────────────────────
   useEffect(() => {
@@ -445,24 +506,199 @@ export default function FileBrowser() {
           </div>
 
           {/* Search */}
-          <div className="relative flex-shrink-0">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
-            </svg>
-            <input
-              id="file-search-input"
-              type="text"
-              placeholder="Search files..."
-              value={searchQuery}
-              onChange={e => void handleSearch(e.target.value)}
-              className="
-                pl-9 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-gray-50
-                focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                w-48
-              "
-            />
+          <div className="relative flex-shrink-0 flex items-center gap-2">
+            <div className="relative">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
+                fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+              </svg>
+              <input
+                id="file-search-input"
+                type="text"
+                placeholder="Search files (Press Enter)..."
+                value={searchQuery}
+                onChange={e => {
+                  setSearchQuery(e.target.value)
+                  if (!e.target.value.trim()) setSearchResults(null)
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    executeSearch(searchQuery)
+                  }
+                }}
+                className="
+                  pl-9 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-gray-50
+                  focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                  w-56
+                "
+              />
+            </div>
+            
+            {/* Smart Search Toggle */}
+            <button
+              onClick={() => setSearchOptions(prev => ({ ...prev, smart: !prev.smart }))}
+              className={`
+                p-1.5 rounded-lg border transition-all flex items-center gap-1.5
+                ${searchOptions.smart 
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-600' 
+                  : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}
+              `}
+              title="AI Smart Search"
+            >
+              <SparklesIcon className="w-4 h-4" />
+            </button>
+            
+            {/* Filter Toggle */}
+            <Popover className="relative">
+              {({ open, close }) => (
+                <>
+                  <Popover.Button
+                    className={`
+                      p-1.5 rounded-lg border transition-all flex items-center gap-1.5 focus:outline-none
+                      ${open || Object.keys(searchOptions).length > 2 
+                        ? 'bg-blue-50 border-blue-200 text-blue-600' 
+                        : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}
+                    `}
+                    title="Search Filters"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                    </svg>
+                    {Object.keys(searchOptions).length > 2 && <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />}
+                  </Popover.Button>
+
+                  {/* Advanced Filter Dropdown */}
+                  <Transition
+                    as={Fragment}
+                    enter="transition ease-out duration-200"
+                    enterFrom="opacity-0 translate-y-1"
+                    enterTo="opacity-100 translate-y-0"
+                    leave="transition ease-in duration-150"
+                    leaveFrom="opacity-100 translate-y-0"
+                    leaveTo="opacity-0 translate-y-1"
+                  >
+                    <Popover.Panel className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 z-[100] p-4 focus:outline-none">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-bold text-gray-800">Search Filters</h3>
+                    <button 
+                      onClick={() => {
+                        setSearchOptions({ sortBy: 'date', order: 'desc' })
+                        close()
+                      }}
+                      className="text-[11px] font-bold text-blue-600 hover:underline uppercase tracking-tight"
+                    >
+                      Reset All
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Sort By */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Sort By</label>
+                      <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                        {(['name', 'date', 'size'] as const).map(s => (
+                          <button
+                            key={s}
+                            onClick={() => setSearchOptions(prev => ({ ...prev, sortBy: s }))}
+                            className={`
+                              flex-1 py-1 px-2 text-[11px] font-bold rounded-md transition-all
+                              ${searchOptions.sortBy === s ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}
+                            `}
+                          >
+                            {s.charAt(0).toUpperCase() + s.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Order */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Order</label>
+                      <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                        {(['desc', 'asc'] as const).map(o => (
+                          <button
+                            key={o}
+                            onClick={() => setSearchOptions(prev => ({ ...prev, order: o }))}
+                            className={`
+                              flex-1 py-1 px-2 text-[11px] font-bold rounded-md transition-all
+                              ${searchOptions.order === o ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}
+                            `}
+                          >
+                            {o === 'desc' ? 'Newest/Largest' : 'Oldest/Smallest'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* MIME Type */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">File Type</label>
+                      <select
+                        value={searchOptions.mimeType || ''}
+                        onChange={e => setSearchOptions(prev => ({ ...prev, mimeType: e.target.value || undefined }))}
+                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">All Types</option>
+                        <option value="application/pdf">PDF Documents</option>
+                        <option value="image/">Images</option>
+                        <option value="application/vnd.openxmlformats-officedocument.wordprocessingml.document">Word Docs</option>
+                        <option value="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">Excel Sheets</option>
+                        <option value="text/">Text Files</option>
+                      </select>
+                    </div>
+
+                    {/* Member Filter */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Uploaded By</label>
+                      <select
+                        value={searchOptions.uploadedBy || ''}
+                        onChange={e => setSearchOptions(prev => ({ ...prev, uploadedBy: e.target.value ? parseInt(e.target.value) : undefined }))}
+                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Anyone</option>
+                        {teamQuery.data?.members?.map(m => (
+                          <option key={m.user.id} value={m.user.id}>
+                            {m.user.id === user?.id ? 'Me' : m.user.username}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Folder Context */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Search In</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setSearchOptions(prev => ({ ...prev, folderId: undefined }))}
+                          className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all ${searchOptions.folderId === undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                        >
+                          Everywhere
+                        </button>
+                        <button
+                          disabled={folderId === null}
+                          onClick={() => setSearchOptions(prev => ({ ...prev, folderId: folderId }))}
+                          className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all disabled:opacity-30 ${searchOptions.folderId !== undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                        >
+                          This Folder
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-gray-50">
+                    <button
+                      onClick={() => close()}
+                      className="w-full bg-blue-600 text-white py-2 rounded-lg text-xs font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
+                    >
+                      Apply Filters
+                    </button>
+                  </div>
+                </Popover.Panel>
+              </Transition>
+              </>
+            )}
+            </Popover>
           </div>
 
           {/* Upload button */}
@@ -534,6 +770,7 @@ export default function FileBrowser() {
               Results for <strong>"{searchQuery}"</strong>
               {' '}— {filesToShow.length} file{filesToShow.length !== 1 ? 's' : ''}
               {extraFolders.length > 0 && `, ${extraFolders.length} folder${extraFolders.length !== 1 ? 's' : ''}`}
+              {documentsToShow.length > 0 && `, ${documentsToShow.length} document${documentsToShow.length !== 1 ? 's' : ''}`}
             </span>
             <button
               onClick={() => { setSearchQuery(''); setSearchResults(null) }}
@@ -551,7 +788,7 @@ export default function FileBrowser() {
           {/* WHY ABOVE FILES: Documents are first-class objects in CloudTeams.
               Placing them above the file grid makes them easy to discover.
               Users naturally look "above" files for richer content. */}
-          {!isSearching && documentsQuery.data && documentsQuery.data.length > 0 && (
+          {documentsToShow.length > 0 && (
             <div className="mb-8">
               <div className="flex items-center gap-2 mb-3">
                 {/* Section icon + title */}
@@ -562,11 +799,11 @@ export default function FileBrowser() {
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   Documents
                 </h3>
-                <span className="text-xs text-gray-400">({documentsQuery.data.length})</span>
+                <span className="text-xs text-gray-400">({documentsToShow.length})</span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
-                {documentsQuery.data.map(doc => (
+                {documentsToShow.map(doc => (
                   <div
                     key={doc.id}
                     className="group relative bg-white border border-gray-200 rounded-xl p-4 hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer"

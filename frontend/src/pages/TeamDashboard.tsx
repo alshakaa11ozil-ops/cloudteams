@@ -10,19 +10,19 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '../hooks/useAuth'
 import toast from 'react-hot-toast'
-import type { TeamMember, TeamRole } from '@/types'
-import type { ActivityLog } from '@/api/teams'
+import type { TeamMember, TeamRole } from '../types'
+import type { ActivityLog } from '../api/teams'
 import {
     fetchTeam, fetchTeamMembers, fetchTeamActivity,
     generateTeamDigest
-} from '@/api/teams'
+} from '../api/teams'
 import { ACTION_SENTENCES } from './ActivityFeed'
-import { fetchAnnouncements, type Announcement } from '@/api/announcements'
-import AnnouncementCard from '@/components/AnnouncementCard'
-import AnnouncementModal from '@/components/AnnouncementModal'
-import InviteBox from '@/components/InviteBox'
+import { fetchAnnouncements, type Announcement } from '../api/announcements'
+import AnnouncementCard from '../components/AnnouncementCard'
+import AnnouncementModal from '../components/AnnouncementModal'
+import InviteBox from '../components/InviteBox'
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 function getMemberName(user?: { full_name?: string | null; username?: string }): string {
@@ -384,9 +384,9 @@ export default function TeamDashboard() {
                 ) : (
                     <div>
                         {/* Digest text */}
-                        <div className="bg-purple-50 border border-purple-100 rounded-lg p-4 mb-3 max-h-64 overflow-y-auto">
+                        <div className="bg-purple-50 border border-purple-100 rounded-lg p-4 mb-3 max-h-48 overflow-y-auto">
                             {/* 
-                                max-h-64 = 256px max height before scrolling
+                                max-h-48 = 192px max height before scrolling
                                 overflow-y-auto = scroll if content overflows
                                 whitespace-pre-wrap = respect paragraph breaks from AI
                                 leading-relaxed = comfortable line height for reading

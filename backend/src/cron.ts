@@ -75,7 +75,7 @@ export function startCronJobs(): void {
     // Deleting them keeps the findUnique lookup fast.
     cron.schedule('0 * * * *', async () => {
         try {
-            const result = await prisma.tokenBlacklist.deleteMany({
+            const result = await prisma.token_blacklist.deleteMany({
                 where: {
                     // expires_at < NOW() means the JWT's own expiry has passed.
                     // jwt.verify() would already reject these tokens anyway.

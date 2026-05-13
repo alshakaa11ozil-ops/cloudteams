@@ -180,7 +180,7 @@
 
 /*
  * HOW YJS CURSORS WORK:
- *   The CollaborationCursor TipTap extension inserts DOM elements for each
+ *   The CollaborationCaret TipTap extension inserts DOM elements for each
  *   connected user's cursor position. When User A moves their cursor,
  *   the Yjs Awareness Protocol broadcasts that position. User B's editor
  *   renders a caret line at that position with a floating name label.
@@ -190,7 +190,7 @@
  */
 
 /* The caret line — a thin vertical bar at the other user's cursor position */
-.collaboration-cursor__caret {
+.collaboration-carets__caret {
   border-left: 2px solid;      /* Color is set inline by TipTap (from user.color) */
   border-right: 2px solid;
   margin-left: -1px;
@@ -201,7 +201,7 @@
 }
 
 /* The floating name label above the cursor */
-.collaboration-cursor__label {
+.collaboration-carets__label {
   border-radius: 3px 3px 3px 0;   /* Slightly rounded, with a corner pointing down */
   color: #fff;
   font-size: 11px;
@@ -226,8 +226,8 @@
 }
 
 /* Reset animation when cursor moves (TipTap re-renders the element) */
-.collaboration-cursor__caret:hover .collaboration-cursor__label,
-.collaboration-cursor__label:hover {
+.collaboration-carets__caret:hover .collaboration-carets__label,
+.collaboration-carets__label:hover {
   animation: none;
   opacity: 1;
 }

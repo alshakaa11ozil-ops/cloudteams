@@ -45,6 +45,11 @@ export const SOCKET_EVENTS = {
     // ── Comments ──────────────────────────────────────────────────────────────
     COMMENT_CREATED: 'comment:created',
     COMMENT_RESOLVED: 'comment:resolved',
+    // ── Documents ────────────────────────────────────────────────────────────
+    DOCUMENT_CREATED: 'document:created',
+    DOCUMENT_RENAMED: 'document:renamed',
+    DOCUMENT_DELETED: 'document:deleted',
+    DOCUMENT_MOVED: 'document:moved',
 
 } as const
 

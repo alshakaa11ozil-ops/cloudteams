@@ -22,6 +22,8 @@
 // =============================================================================
 
 import prisma from '../config/database'
+import { emitToTeam } from '../socket'
+import { SOCKET_EVENTS } from '../config/socketEvents'
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -44,6 +46,8 @@ export interface DocumentSummary {
     createdAt: Date
     updatedAt: Date
     deletedAt?: Date | null
+    lockOwnerUserId?: number | null
+    lockExpiresAt?: Date | null
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +56,7 @@ export interface DocumentSummary {
 // PURPOSE: Insert a new blank document DB row so Hocuspocus can fetch it.
 //
 // WHY WE CREATE THE ROW BEFORE CONNECTING:
-//   Hocuspocus.onAuthenticate checks prisma.document.findFirst({ is_deleted: false }).
+//   Hocuspocus.onAuthenticate checks prisma.documents.findFirst({ is_deleted: false }).
 //   If the row doesn't exist, the WebSocket is rejected before the editor loads.
 //   We must create the row FIRST, then navigate the user to the editor URL.
 //
@@ -74,7 +78,7 @@ export async function createDocument(input: CreateDocumentInput) {
         }
     }
 
-    const doc = await prisma.document.create({
+    const doc = await prisma.documents.create({
         data: {
             team_id: teamId,
             created_by: createdBy,
@@ -82,6 +86,7 @@ export async function createDocument(input: CreateDocumentInput) {
             folder_id: folderId ?? null,
             yjs_state: null,       // blank — Hocuspocus initialises fresh Y.Doc
             is_deleted: false,
+            updated_at: new Date(),
         },
         select: {
             id: true,
@@ -92,6 +97,12 @@ export async function createDocument(input: CreateDocumentInput) {
             created_at: true,
             updated_at: true,
         }
+    })
+
+    // Emit socket event to team so other users' UI updates in real-time
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_CREATED, {
+        document: doc,
+        createdBy
     })
 
     return doc
@@ -107,7 +118,7 @@ export async function createDocument(input: CreateDocumentInput) {
 //   Joining the User table in Prisma is just a nested select — no extra query.
 // ---------------------------------------------------------------------------
 export async function listDocuments(teamId: number, folderId?: number | null): Promise<DocumentSummary[]> {
-    const docs = await prisma.document.findMany({
+    const docs = await prisma.documents.findMany({
         where: {
             team_id: teamId,
             is_deleted: false,
@@ -121,7 +132,9 @@ export async function listDocuments(teamId: number, folderId?: number | null): P
             last_saved: true,
             created_at: true,
             updated_at: true,
-            creator: {
+            lockOwnerUserId: true,
+            lockExpiresAt: true,
+            users: {
                 select: { full_name: true, username: true }
             }
         },
@@ -133,10 +146,12 @@ export async function listDocuments(teamId: number, folderId?: number | null): P
         title: d.title,
         folderId: d.folder_id,
         createdBy: d.created_by,
-        creatorName: d.creator.full_name ?? d.creator.username ?? null,
+        creatorName: d.users.full_name ?? d.users.username ?? null,
         lastSaved: d.last_saved,
         createdAt: d.created_at,
         updatedAt: d.updated_at,
+        lockOwnerUserId: d.lockOwnerUserId,
+        lockExpiresAt: d.lockExpiresAt,
     }))
 }
 
@@ -147,7 +162,7 @@ export async function listDocuments(teamId: number, folderId?: number | null): P
 //          title in the header and to detect if the docId is valid.
 // ---------------------------------------------------------------------------
 export async function getDocument(docId: number, teamId: number): Promise<DocumentSummary | null> {
-    const doc = await prisma.document.findFirst({
+    const doc = await prisma.documents.findFirst({
         where: {
             id: docId,
             team_id: teamId,
@@ -161,7 +176,9 @@ export async function getDocument(docId: number, teamId: number): Promise<Docume
             last_saved: true,
             created_at: true,
             updated_at: true,
-            creator: {
+            lockOwnerUserId: true,
+            lockExpiresAt: true,
+            users: {
                 select: { full_name: true, username: true }
             }
         }
@@ -174,10 +191,12 @@ export async function getDocument(docId: number, teamId: number): Promise<Docume
         title: doc.title,
         folderId: doc.folder_id,
         createdBy: doc.created_by,
-        creatorName: doc.creator.full_name ?? doc.creator.username ?? null,
+        creatorName: doc.users.full_name ?? doc.users.username ?? null,
         lastSaved: doc.last_saved,
         createdAt: doc.created_at,
         updatedAt: doc.updated_at,
+        lockOwnerUserId: doc.lockOwnerUserId,
+        lockExpiresAt: doc.lockExpiresAt,
     }
 }
 
@@ -201,16 +220,22 @@ export async function renameDocument(
     if (trimmed.length > 255) throw new Error('TITLE_TOO_LONG')
 
     // Verify document exists in this team before updating
-    const existing = await prisma.document.findFirst({
+    const existing = await prisma.documents.findFirst({
         where: { id: docId, team_id: teamId, is_deleted: false },
         select: { id: true }
     })
     if (!existing) throw new Error('DOCUMENT_NOT_FOUND')
 
-    const updated = await prisma.document.update({
+    const updated = await prisma.documents.update({
         where: { id: docId },
         data: { title: trimmed },
         select: { id: true, title: true }
+    })
+
+    // Emit socket event
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_RENAMED, {
+        documentId: docId,
+        newTitle: updated.title
     })
 
     return updated
@@ -228,19 +253,24 @@ export async function renameDocument(
 //   (Full real-time kick-out would require a WebSocket message — out of scope.)
 // ---------------------------------------------------------------------------
 export async function softDeleteDocument(docId: number, teamId: number) {
-    const existing = await prisma.document.findFirst({
+    const existing = await prisma.documents.findFirst({
         where: { id: docId, team_id: teamId, is_deleted: false },
         select: { id: true }
     })
     if (!existing) throw new Error('DOCUMENT_NOT_FOUND')
 
     // Update is_deleted to true instead of hard deleting (to protect audit trail logic)
-    await prisma.document.update({
+    await prisma.documents.update({
         where: { id: docId },
         data: {
             is_deleted: true,
             deleted_at: new Date(),
         }
+    })
+
+    // Emit socket event
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_DELETED, {
+        documentId: docId
     })
 }
 
@@ -248,7 +278,7 @@ export async function softDeleteDocument(docId: number, teamId: number) {
 // moveDocument
 // ---------------------------------------------------------------------------
 export async function moveDocument(docId: number, teamId: number, targetFolderId: number | null) {
-    const existing = await prisma.document.findFirst({
+    const existing = await prisma.documents.findFirst({
         where: { id: docId, team_id: teamId, is_deleted: false },
         select: { id: true }
     })
@@ -261,11 +291,109 @@ export async function moveDocument(docId: number, teamId: number, targetFolderId
         if (!folder) throw new Error('FOLDER_NOT_FOUND')
     }
 
-    const updated = await prisma.document.update({
+    const updated = await prisma.documents.update({
         where: { id: docId },
         data: { folder_id: targetFolderId },
         select: { id: true, folder_id: true }
     })
 
+    // Emit socket event
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_MOVED, {
+        documentId: docId,
+        targetFolderId
+    })
+
+    return updated
+}
+
+// ---------------------------------------------------------------------------
+// lockDocument
+// ---------------------------------------------------------------------------
+export async function lockDocument(docId: number, teamId: number, userId: number, durationMinutes: number = 60) {
+    const existing = await prisma.documents.findFirst({
+        where: { id: docId, team_id: teamId, is_deleted: false },
+        select: { id: true, lockOwnerUserId: true, lockExpiresAt: true }
+    })
+    if (!existing) throw new Error('DOCUMENT_NOT_FOUND')
+
+    if (existing.lockExpiresAt && existing.lockExpiresAt > new Date() && existing.lockOwnerUserId !== userId) {
+        throw new Error('DOCUMENT_LOCKED')
+    }
+
+    const expiresAt = new Date(Date.now() + durationMinutes * 60000)
+
+    const updated = await prisma.documents.update({
+        where: { id: docId },
+        data: {
+            lockOwnerUserId: userId,
+            lockExpiresAt: expiresAt,
+            lockToken: Math.random().toString(36).substring(2, 15)
+        },
+        select: { id: true, lockOwnerUserId: true, lockExpiresAt: true }
+    })
+
+    // Emit socket event
+    emitToTeam(teamId, 'DOCUMENT_LOCKED', {
+        documentId: docId,
+        lockedBy: userId,
+        expiresAt
+    })
+
+    return updated
+}
+
+// ---------------------------------------------------------------------------
+// unlockDocument
+// ---------------------------------------------------------------------------
+export async function unlockDocument(docId: number, teamId: number, userId: number, force: boolean = false) {
+    const existing = await prisma.documents.findFirst({
+        where: { id: docId, team_id: teamId, is_deleted: false },
+        select: { id: true, lockOwnerUserId: true }
+    })
+    if (!existing) throw new Error('DOCUMENT_NOT_FOUND')
+
+    if (!force && existing.lockOwnerUserId !== userId) {
+        throw new Error('DOCUMENT_LOCKED_BY_OTHER')
+    }
+
+    const updated = await prisma.documents.update({
+        where: { id: docId },
+        data: {
+            lockOwnerUserId: null,
+            lockExpiresAt: null,
+            lockToken: null
+        },
+        select: { id: true }
+    })
+
+    // Emit socket event
+    emitToTeam(teamId, 'DOCUMENT_UNLOCKED', {
+        documentId: docId
+    })
+
+    return updated
+}
+
+// ---------------------------------------------------------------------------
+// forceUnlockDocument (admin only — called by the controller after role check)
+// ---------------------------------------------------------------------------
+export async function forceUnlockDocument(docId: number, teamId: number) {
+    const existing = await prisma.documents.findFirst({
+        where: { id: docId, team_id: teamId, is_deleted: false },
+        select: { id: true }
+    })
+    if (!existing) throw new Error('DOCUMENT_NOT_FOUND')
+
+    const updated = await prisma.documents.update({
+        where: { id: docId },
+        data: {
+            lockOwnerUserId: null,
+            lockExpiresAt: null,
+            lockToken: null
+        },
+        select: { id: true }
+    })
+
+    emitToTeam(teamId, 'DOCUMENT_UNLOCKED', { documentId: docId })
     return updated
 }

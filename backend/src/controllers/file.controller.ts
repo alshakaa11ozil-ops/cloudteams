@@ -23,18 +23,20 @@ import {
     uploadFile,
     getTeamFiles,
     getFileById,
-    getFileForDownload,
     softDeleteFile,
     FileNotFoundError,
     ForbiddenError,
     listFiles,
-    renameFile,        // ← NEW: Week 12 rename feature
+    renameFile,
     getFilePreview,
+    downloadFileService, // Added
+    getFileForDownload, // Used in openEditorHandler
 } from "../services/file.service";
 import multer from "multer"; // imported for MulterError instanceof check.
 import prisma from "../config/database";
 import { File as PrismaFile } from '../generated/prisma';
 import { AppError, assertTeamMember } from '../utils/teamGuard';
+import { decryptBuffer } from '../utils/fileEncryption';
 
 
 
@@ -271,41 +273,97 @@ export const getFileByIdHandler = async (
 
 // In file.controller.ts download handler:
 
+// --- REPLACE the download handler in file.controller.ts ---
+// PURPOSE: Stream the file from R2 directly to the HTTP response.
+// WHY PIPE not buffer: pipe() reads chunks from R2 and writes them
+// to the response as they arrive. The whole file never sits in RAM at once.
+
+// src/controllers/file.controller.ts
+// REPLACE your existing downloadFile controller with this
+
 export const downloadFileHandler = async (req: Request, res: Response): Promise<void> => {
     try {
-        const fileId = parseInt(req.params.id as string, 10)
-        const teamId = parseInt(req.query.teamId as string, 10)
-        const userId = req.user!.userId
+        const fileId = parseInt(req.params.id as string, 10);
+        const userId = req.user!.userId;
 
-        const { buffer, storagePath, file } = await getFileForDownload(fileId, teamId, userId)
+        // Service returns { stream, file } — stream comes from R2, file is the DB record
+        const { stream, file } = await downloadFileService(fileId, userId);
 
-        // Set filename header for browser download dialog
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="${encodeURIComponent(file.original_name)}"`
-        )
-        res.setHeader('Content-Type', file.mime_type ?? 'application/octet-stream')
+        // ── COLLECT STREAM INTO BUFFER ──────────────────────────────────────────
+        // WHY: We can't decrypt a stream directly because AES-256-GCM needs the
+        // auth tag (first 16 bytes) before it can begin decrypting the ciphertext.
+        // We must have ALL bytes in hand before we can start. So we collect every
+        // chunk the R2 stream emits into an array, then concatenate into one Buffer.
+        const chunks: Buffer[] = [];
 
-        if (buffer) {
-            // Encrypted file — send decrypted buffer directly
-            // WHY BUFFER NOT FILE: The file on disk is encrypted ciphertext.
-            // We send the decrypted plaintext bytes to the client.
-            res.setHeader('Content-Length', buffer.length)
-            res.send(buffer)
-        } else if (storagePath) {
-            // Legacy unencrypted file — stream from disk
-            res.sendFile(storagePath)
+        stream.on('data', (chunk: Buffer) => {
+            chunks.push(Buffer.from(chunk)); // accumulate each chunk
+        });
+
+        stream.on('error', (err) => {
+            console.error('[Download] R2 stream error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Download failed' });
+            }
+        });
+
+        stream.on('end', () => {
+            // All chunks received — join into one contiguous Buffer
+            const fileBuffer = Buffer.concat(chunks);
+
+            // ── DECRYPT IF NEEDED ─────────────────────────────────────────────────
+            // WHY CHECK encryption_iv: Files uploaded before encryption was enabled
+            // have null encryption_iv. We serve them directly. This backward
+            // compatibility means existing files never break after you add encryption.
+            const encryptionIv = (file as any).encryption_iv as string | null;
+
+            let outputBuffer: Buffer;
+
+            if (encryptionIv) {
+                // File was encrypted at upload time — decrypt now before sending
+                try {
+                    outputBuffer = decryptBuffer(fileBuffer, encryptionIv);
+                } catch (err) {
+                    console.error('[Download] Decryption failed — auth tag mismatch:', err);
+                    // Auth tag mismatch = file was tampered with on R2
+                    if (!res.headersSent) {
+                        res.status(500).json({ error: 'File integrity check failed' });
+                    }
+                    return;
+                }
+            } else {
+                // No encryption IV — serve the raw bytes directly
+                outputBuffer = fileBuffer;
+            }
+
+            // ── SEND TO BROWSER ───────────────────────────────────────────────────
+            // Content-Disposition: attachment tells the browser to save the file,
+            // not try to open/render it inline.
+            res.setHeader(
+                'Content-Disposition',
+                `attachment; filename="${file.original_name}"`
+            );
+            res.setHeader(
+                'Content-Type',
+                file.mime_type ?? 'application/octet-stream'
+            );
+            // Content-Length must reflect the DECRYPTED size, not the encrypted size.
+            // Without it, some browsers show incorrect progress bars.
+            res.setHeader('Content-Length', outputBuffer.length.toString());
+            res.end(outputBuffer);
+        });
+
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+        } else {
+            console.error('[Download] Unexpected error:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Internal server error' });
+            }
         }
-
-    } catch (err) {
-        if (err instanceof AppError) {
-            res.status(err.statusCode).json({ error: err.message })
-            return
-        }
-        console.error('[downloadFileHandler]', err)
-        res.status(500).json({ error: 'Download failed' })
     }
-}
+};
 // CONTROLLER: listFilesHandler
 // Route: GET /api/teams/:id/files
 // Optional query params:
@@ -339,7 +397,22 @@ export async function listFilesHandler(req: Request, res: Response) {
             folderId = isNaN(parsed) ? undefined : parsed;
         }
 
-        const files = await listFiles(teamId, userId, folderId);
+        // Parse advanced filters
+        const { mimeType, uploadedBy: uploadedByRaw, sortBy: sortByRaw, order: orderRaw } = req.query;
+        let uploadedBy: number | undefined;
+        if (uploadedByRaw) {
+            const parsed = parseInt(uploadedByRaw as string, 10);
+            if (!isNaN(parsed)) uploadedBy = parsed;
+        }
+        const sortBy = (sortByRaw as 'name' | 'date' | 'size') || 'date';
+        const order = (orderRaw as 'asc' | 'desc') || 'desc';
+
+        const files = await listFiles(teamId, userId, folderId, {
+            mimeType: mimeType as string | undefined,
+            uploadedBy,
+            sortBy,
+            order
+        });
         res.status(200).json({ files });
     } catch (error) {
         console.error('[listFilesHandler]', error);
@@ -598,43 +671,22 @@ export const openEditorHandler = async (
             return
         }
 
-        // Load the file record from DB — verifies the file exists and isn't deleted.
-        // This also gives us storage_path, mime_type, and yjs_state.
-        const file = await prisma.file.findFirst({
-            where: { id: fileId, is_deleted: false },
-            select: {
-                id: true,
-                team_id: true,
-                storage_path: true,
-                original_name: true,
-                mime_type: true,
-                yjs_state: true,
-            }
-        })
-
-        if (!file) {
-            res.status(404).json({ error: 'File not found or has been deleted' })
-            return
-        }
-
-        // Verify the user is a member of the team that owns this file.
-        // WHY NOT use middleware: teamId comes from the file record itself,
-        // not from a URL param we can middleware-check before the DB query.
-        if (file.team_id !== teamId) {
-            res.status(403).json({ error: 'File does not belong to this team' })
-            return
-        }
+        // Use getFileForDownload to handle auth, fetching, and decryption
+        let buffer: Buffer | null = null;
+        let storagePath: string | null = null;
+        let file: any;
 
         try {
-            // Using the shared guard to verify team membership.
-            // Throws an AppError with 403 if the user is not in the team.
-            await assertTeamMember(userId, teamId, 'viewer')
+            const result = await getFileForDownload(fileId, teamId, userId)
+            buffer = result.buffer
+            storagePath = result.storagePath
+            file = result.file
         } catch (error: any) {
             if (error instanceof AppError) {
                 res.status(error.statusCode).json({ error: error.message })
                 return
             }
-            throw error
+            throw error;
         }
 
         // Verify the file format is supported for collaborative editing
@@ -666,13 +718,22 @@ export const openEditorHandler = async (
         const name = file.original_name.toLowerCase()
         const fs = await import('fs/promises')
 
+        let fileBuffer: Buffer;
+        if (buffer) {
+            fileBuffer = buffer;
+        } else if (storagePath) {
+            fileBuffer = await fs.readFile(storagePath);
+        } else {
+            throw new Error('File content could not be loaded');
+        }
+
         if (name.endsWith('.txt') || name.endsWith('.md')) {
             // Plain text / Markdown — read raw UTF-8 content.
             // WHY raw text for .md: TipTap does not natively parse Markdown syntax.
             // We return it as plain text. The Markdown formatting (# headings, **bold**)
             // will appear as literal characters — that's acceptable for Day 2.
             // Day 4 (Slash commands) can add a proper Markdown import extension.
-            const content = await fs.readFile(file.storage_path, 'utf-8')
+            const content = fileBuffer.toString('utf-8')
             res.status(200).json({
                 hasExistingState: false,
                 contentType: 'text',   // frontend inserts as plain text paragraphs
@@ -687,7 +748,6 @@ export const openEditorHandler = async (
             // TipTap's setContent(html) parses this HTML natively.
             // We pass { styleMap: [] } to avoid class-based styles — TipTap uses marks.
             const mammoth = await import('mammoth')
-            const fileBuffer = await fs.readFile(file.storage_path)
             const { value: html } = await mammoth.convertToHtml(
                 { buffer: fileBuffer },
                 {

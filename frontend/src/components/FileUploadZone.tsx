@@ -8,7 +8,7 @@
 //   onCancel        — called when user clicks cancel
 
 import { useState, useRef, useCallback } from 'react'
-import { uploadFile } from '@/api/files'
+import { uploadFile } from '../api/files'
 // toast for upload result feedback
 import toast from 'react-hot-toast'
 

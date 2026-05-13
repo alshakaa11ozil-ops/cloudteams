@@ -14,9 +14,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import api from '@/api/axios'
-import { useAuth } from '@/hooks/useAuth'
-import type { AuthResponse, TwoFARequiredResponse } from '@/types'
+import api from '../api/axios'
+import { useAuth } from '../hooks/useAuth'
+import type { AuthResponse, TwoFARequiredResponse } from '../types'
 
 // ─── 1. ZOD SCHEMA ─────────────────────────────────────────────────────────
 //

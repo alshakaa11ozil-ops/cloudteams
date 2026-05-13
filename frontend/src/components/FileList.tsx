@@ -13,9 +13,9 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { downloadFile, fetchLockStatus } from '@/api/files'
-import LockBanner from '@/components/LockBanner'
-import type { CloudFile, Folder } from '@/types'
+import { downloadFile, fetchLockStatus } from '../api/files'
+import LockBanner from '../components/LockBanner'
+import type { CloudFile, Folder } from '../types'
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 

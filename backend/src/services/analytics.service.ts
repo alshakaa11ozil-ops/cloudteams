@@ -26,8 +26,10 @@ export interface AnalyticsResult {
   };
   fileTypes: FileTypeRow[];       // breakdown by MIME type
   memberActivity: MemberActivityRow[]; // leaderboard by action count
-  uploadsPerDay: UploadsPerDayRow[];   // last 7 days of upload counts
+  uploadsPerDay: UploadsPerDayRow[];   // upload counts over time
   topFolders: TopFolderRow[];          // folders with most files
+  largestFiles: LargestFileRow[];      // Top 5 largest files
+  activityByType: ActivityByTypeRow[]; // Action breakdown over time
 }
 
 // Raw SQL result rows — Prisma returns unknown[] from $queryRaw,
@@ -54,6 +56,19 @@ interface TopFolderRow {
   folder_id: number;
   folder_name: string;
   file_count: number;  // BigInt from COUNT — converted
+}
+
+interface LargestFileRow {
+  file_id: number;
+  original_name: string;
+  file_size: number;
+  file_size_formatted: string;
+}
+
+interface ActivityByTypeRow {
+  day: string;
+  action: string;
+  count: number;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -112,7 +127,16 @@ function toNumber(value: unknown): number {
 //           with Promise.all means total time = slowest query,
 //           not the sum of all queries.
 // ════════════════════════════════════════════════════════════
-export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult> {
+export async function getTeamAnalytics(
+  teamId: number,
+  startDateStr?: string,
+  endDateStr?: string
+): Promise<AnalyticsResult> {
+
+  const defaultStart = new Date();
+  defaultStart.setDate(defaultStart.getDate() - 30); // Default to last 30 days
+  const start = startDateStr ? new Date(startDateStr) : defaultStart;
+  const end = endDateStr ? new Date(endDateStr) : new Date();
 
   // ── QUERY 1: Storage totals ─────────────────────────────
   // Prisma aggregate handles SUM and COUNT cleanly for
@@ -161,6 +185,8 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     FROM activity_logs al
     JOIN users u ON u.id = al.user_id
     WHERE al.team_id = ${teamId}
+      AND al.created_at >= ${start}
+      AND al.created_at <= ${end}
     GROUP BY u.id, u.username, u.email
     ORDER BY action_count DESC
     LIMIT 10
@@ -182,7 +208,8 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     FROM files
     WHERE team_id   = ${teamId}
       AND is_deleted = false
-      AND created_at >= NOW() - INTERVAL '6 days'
+      AND created_at >= ${start}
+      AND created_at <= ${end}
     GROUP BY day
     ORDER BY day ASC
   `;
@@ -208,28 +235,51 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     ORDER BY file_count DESC
     LIMIT 5
   `;
-  // Both the folder AND the file must not be deleted.
-  // If a folder is active but all its files are deleted,
-  // it wouldn't appear anyway because COUNT = 0 and the
-  // JOIN would return no rows.
 
-  // ── Run all 5 queries simultaneously ──────────────────
-  // Promise.all takes an array of promises and resolves when
-  // ALL of them complete. If any one throws, the whole
-  // Promise.all rejects — which is fine, the controller
-  // catches it and returns 500.
+  // ── QUERY 6: Largest files ─────────────────────────────
+  const largestFilesPromise = prisma.$queryRaw<any[]>`
+    SELECT
+      id AS file_id,
+      original_name,
+      file_size
+    FROM files
+    WHERE team_id = ${teamId}
+      AND is_deleted = false
+    ORDER BY file_size DESC
+    LIMIT 5
+  `;
+
+  // ── QUERY 7: Activity by Type ──────────────────────────
+  const activityByTypePromise = prisma.$queryRaw<any[]>`
+    SELECT
+      DATE_TRUNC('day', created_at)::date AS day,
+      action,
+      COUNT(*) AS count
+    FROM activity_logs
+    WHERE team_id = ${teamId}
+      AND created_at >= ${start}
+      AND created_at <= ${end}
+    GROUP BY day, action
+    ORDER BY day ASC
+  `;
+
+  // ── Run all queries simultaneously ──────────────────
   const [
     storageResult,
     fileTypesRaw,
     memberActivityRaw,
     uploadsPerDayRaw,
     topFoldersRaw,
+    largestFilesRaw,
+    activityByTypeRaw,
   ] = await Promise.all([
     storagePromise,
     fileTypesPromise,
     memberActivityPromise,
     uploadsPerDayPromise,
     topFoldersPromise,
+    largestFilesPromise,
+    activityByTypePromise,
   ]);
 
   // ── Process storage result ─────────────────────────────
@@ -270,6 +320,19 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     file_count: toNumber(row.file_count),
   }));
 
+  const largestFiles: LargestFileRow[] = largestFilesRaw.map(row => ({
+    file_id: toNumber(row.file_id),
+    original_name: row.original_name,
+    file_size: toNumber(row.file_size),
+    file_size_formatted: formatBytes(toNumber(row.file_size)),
+  }));
+
+  const activityByType: ActivityByTypeRow[] = activityByTypeRaw.map(row => ({
+    day: new Date(String(row.day)).toISOString().split('T')[0],
+    action: row.action,
+    count: toNumber(row.count),
+  }));
+
   // ── Assemble and return final result ───────────────────
   return {
     storage: {
@@ -281,5 +344,7 @@ export async function getTeamAnalytics(teamId: number): Promise<AnalyticsResult>
     memberActivity,
     uploadsPerDay,
     topFolders,
+    largestFiles,
+    activityByType,
   };
 }

@@ -10,7 +10,7 @@
 //   3. Components import one thing: useAuth, not two: useContext + AuthContext
 
 import { useContext } from 'react'
-import { AuthContext } from '@/context/AuthContext'
+import { AuthContext } from '../context/AuthContext'
 
 export function useAuth() {
     const context = useContext(AuthContext)

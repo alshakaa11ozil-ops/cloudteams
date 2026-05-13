@@ -116,7 +116,7 @@ export const authenticate = async (
     // CHECK 2: Blacklist lookup
     // If this token was explicitly invalidated via logout, reject it
     // even though its signature is still mathematically valid.
-    const blacklisted = await prisma.tokenBlacklist.findUnique({
+    const blacklisted = await prisma.token_blacklist.findUnique({
       where: { token }
       // findUnique uses the UNIQUE index on 'token' — this is a fast O(1) lookup,
       // not a full table scan. The index is created automatically by @unique in schema.

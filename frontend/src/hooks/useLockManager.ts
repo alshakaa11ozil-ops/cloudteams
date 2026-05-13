@@ -24,7 +24,7 @@
 //   release       — function to manually release before unmount (e.g., Save button)
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { lockFile, sendHeartbeat, unlockFile } from '@/api/files'
+import { lockFile, sendHeartbeat, unlockFile } from '../api/files'
 import toast from 'react-hot-toast'
 
 // ─── TYPES ──────────────────────────────────────────────────────────────────
@@ -136,9 +136,9 @@ export function useLockManager({
         if (cancelled) return
 
         // Common failure: 409 Conflict = another user holds the lock
-        const message = (err as any)?.response?.data?.error || 
-                        (err as Error)?.message || 
-                        'Failed to acquire lock'
+        const message = (err as any)?.response?.data?.error ||
+          (err as Error)?.message ||
+          'Failed to acquire lock'
         setError(message)
         setLockedByMe(false)
         // Notify the user why the lock failed (e.g. "File already locked")

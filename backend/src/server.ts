@@ -55,7 +55,6 @@ import documentRoutes from './routes/documentRoutes'
 dotenv.config()
 
 const app = express()
-const PORT = process.env.PORT || 3001
 
 // ============================================================
 // SECURITY MIDDLEWARE
@@ -122,6 +121,8 @@ app.use((err: any, req: express.Request, res: express.Response, _next: express.N
 const startServer = async () => {
   // Step 1: Verify DB connection — fail fast if DB is unreachable
   await testConnection()
+  // server.ts — use PORT env var
+  const PORT = process.env.PORT || 3001; // Railway sets PORT automatically
 
   // Step 2: Create raw HTTP server from Express app
   const httpServer = http.createServer(app)

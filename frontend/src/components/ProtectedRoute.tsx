@@ -14,7 +14,7 @@
 //   </Route>
 
 import { Navigate, Outlet } from 'react-router-dom'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '../hooks/useAuth'
 
 export function ProtectedRoute() {
     // Read auth state from AuthContext via our useAuth hook.

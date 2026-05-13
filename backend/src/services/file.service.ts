@@ -19,9 +19,9 @@ import fs from "fs";
 import mammoth from "mammoth";
 import * as xlsx from "xlsx";
 import path from "path";
+import { Readable } from 'stream';
 import prisma from "../config/database"; // Prisma singleton
 import { calculateFileHash } from "../utils/hash"; // SHA-256 utility
-import { UPLOADS_DIR } from "../config/multer"; // single source of truth for upload dir
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction, ActivityTargetType } from '../utils/activityLogger';
 import { explainDuplicate } from './AI/duplicateExplain.service';
@@ -29,10 +29,9 @@ import { File as PrismaFile } from '../generated/prisma';
 import { emitToTeam } from '../socket';
 import { SOCKET_EVENTS } from '../config/socketEvents';
 import { createVersion } from './version.service';
-import { encryptFile, isEncryptionEnabled, decryptFile } from '../utils/fileEncryption'
+import { encryptBuffer, isEncryptionEnabled, decryptBuffer, decryptFile } from '../utils/fileEncryption'
 import * as Y from 'yjs'
-
-// ---------------------------------------------------------------------------
+import { uploadFile as r2Upload, deleteFile as r2Delete, generateObjectKey, getFileStream } from './storage.service';
 // CUSTOM ERROR CLASSES
 // ---------------------------------------------------------------------------
 // PURPOSE: Typed errors let the controller map each error to the correct
@@ -57,27 +56,6 @@ export class ForbiddenError extends Error {
         this.name = "ForbiddenError";
     }
 }
-
-// ---------------------------------------------------------------------------
-// HELPER: verifyTeamMembership
-// ---------------------------------------------------------------------------
-// PURPOSE: Confirm that a user belongs to a specific team before allowing
-//          any file operation. This is the authorisation gate for every
-//          function in this service.
-//
-// INPUTS:
-//   userId (number) — the ID of the requesting user (from JWT payload)
-//   teamId (number) — the team the operation targets
-//
-// OUTPUTS:
-//   Promise<void>   — resolves silently if member found
-//                   — throws ForbiddenError if not a member
-//
-// WHY A SEPARATE HELPER?
-//   Every service function needs this check. Extracting it avoids
-//   duplicating the same Prisma query 5 times. If the check logic ever
-//   changes (e.g. add suspended-member status), we update one place.
-// ---------------------------------------------------------------------------
 
 
 // ---------------------------------------------------------------------------
@@ -166,12 +144,24 @@ export const uploadFile = async (
     userAgent: string,
     folderId?: number
 ): Promise<{ file: object; isDuplicate: boolean; duplicateReason?: string | null }> => {
-    // STEP 1: Verify the uploader has editor or admin role in this team
+
+    // ─── STEP 1: Permission check ───────────────────────────────────────────────
     await verifyEditorRole(uploadedBy, teamId);
 
-    // STEP 3: Check for an existing file with the same NAME in the same FOLDER
-    // WHY? If 'report.pdf' already exists, we should create a new version of it,
-    // NOT a separate file record. This satisfies the "Versioning" requirement.
+    // ─── STEP 2: Hash the buffer ────────────────────────────────────────────────
+    // multerFile.buffer exists because we switched to memoryStorage.
+    // multerFile.path no longer exists — there is no disk file.
+    const hash = calculateFileHash(multerFile.buffer);
+
+    // ─── STEP 3: Content deduplication check ────────────────────────────────────
+    // Does a file with this exact content already exist in this team?
+    const existingContent = await prisma.file.findFirst({
+        where: { hash, team_id: teamId, is_deleted: false },
+    });
+
+    // ─── STEP 4: Name collision check ───────────────────────────────────────────
+    // Does a file with this name already exist in the same folder?
+    // If yes → we're uploading a new VERSION, not a new file.
     const fileWithSameName = await prisma.file.findFirst({
         where: {
             original_name: multerFile.originalname,
@@ -181,155 +171,164 @@ export const uploadFile = async (
         },
     });
 
-    // STEP 4: Calculate SHA-256 hash of the uploaded file
-    const hash = await calculateFileHash(multerFile.path);
-
-    // STEP 5: Check for an existing file with this HASH (Content Deduplication)
-    // We do this FIRST to ensure versions can also be deduplicated!
-    const existingContent = await prisma.file.findFirst({
-        where: {
-            hash,
-            team_id: teamId,
-            is_deleted: false,
-        },
-    });
-
+    // ─── STEP 5: Prepare the buffer we'll send to R2 ────────────────────────────
+    // If encryption is enabled AND this is genuinely new content, encrypt the buffer.
+    // Duplicates reuse the original's storage_path (already encrypted at first upload).
+    let bufferToUpload = multerFile.buffer;   // default: plaintext
+    let encryptionIv: string | null = null;
     let storagePath: string;
     let isDuplicate: boolean;
     let duplicateReason: string | null = null;
 
     if (existingContent) {
-        // Content duplicate -> delete redundant disk copy
-        if (fs.existsSync(multerFile.path)) {
-            fs.unlinkSync(multerFile.path);
-        }
+        // ── CONTENT DUPLICATE ──
+        // Same bytes already stored in R2. Don't upload again.
+        // Point the new DB record at the existing R2 object key.
         storagePath = existingContent.storage_path;
         isDuplicate = true;
-        // Generate AI explanation for the duplicate
+        // Copy IV from the original — same object in R2, same IV needed to decrypt.
+        encryptionIv = (existingContent as any).encryption_iv ?? null;
         duplicateReason = await explainDuplicate(teamId, multerFile.originalname, existingContent.id);
-    } else {
-        storagePath = multerFile.path;
-        isDuplicate = false;
-    }
 
-    // STEP 5.5: Encryption (Week 15)
-    // We only encrypt truly new files. Duplicates share the original's storage path
-    // and were already encrypted (or not) when first uploaded.
-    let encryptionIv: string | null = null;
-    if (isEncryptionEnabled()) {
-        if (isDuplicate && existingContent) {
-            // Duplicate content -> copy the IV from the original file
-            // Since they share the storage path, they MUST share the same IV.
-            encryptionIv = (existingContent as any).encryption_iv;
-        } else if (!isDuplicate) {
-            // Truly new file -> encrypt it
+    } else {
+        // ── NEW CONTENT ──
+        // Encrypt the buffer if encryption is enabled.
+        if (isEncryptionEnabled()) {
             try {
-                const result = await encryptFile(multerFile.path);
-                encryptionIv = result.iv;
-                console.log(`[Upload] File encrypted, IV generated: ${encryptionIv}`);
+                const { encryptedBuffer, iv } = encryptBuffer(multerFile.buffer);
+                bufferToUpload = encryptedBuffer;   // upload the encrypted version
+                encryptionIv = iv;
             } catch (err) {
-                console.error('[Upload] Encryption failed:', err);
-                // Don't fail the upload — store unencrypted with null IV
-                // The download handler checks for null IV and serves file directly
+                console.error('[Upload] Encryption failed, storing unencrypted:', err);
+                // Graceful degradation — upload plaintext, null IV signals no encryption.
+                // Download handler checks for null IV and serves the buffer directly.
             }
         }
+
+        isDuplicate = false;
+        // storage_path will be set after we create the DB record and get its ID.
+        // We need the DB ID to build the R2 key (teams/1/files/42-report.pdf).
+        storagePath = 'pending'; // temporary placeholder
     }
 
+    // ─── STEP 6: Name collision → create a new VERSION ──────────────────────────
     if (fileWithSameName) {
-        // NAME CLASH -> POTENTIAL NEW VERSION
 
         if (fileWithSameName.hash === hash) {
-            // EXACT SAME FILE UPLOADED AGAIN (Same Name AND Same Content)
-            // It's already deduplicated above (fs.unlinkSync ran).
-            // Do NOT create a version. Just return the existing file to avoid spamming versions.
+            // Exact same name AND exact same content — already handled by dedup above.
+            // Don't create a version entry for an identical re-upload.
             return { file: fileWithSameName, isDuplicate: true, duplicateReason };
         }
 
-        // DIFFERENT CONTENT -> CREATE A NEW VERSION
-        // 1. Snapshot the CURRENT state of the file into FileVersion table
+        // Different content under the same name → snapshot current state as a version.
         await createVersion(fileWithSameName.id);
 
-        // 2. Update the main File record with the NEW upload data
+        // If this is new content (not a duplicate), upload to R2 now.
+        // We use the EXISTING file's DB id for the object key — it's the same logical file.
+        if (!existingContent) {
+            const objectKey = generateObjectKey(teamId, fileWithSameName.id, multerFile.originalname);
+            try {
+                await r2Upload(bufferToUpload, objectKey, multerFile.mimetype);
+                storagePath = objectKey;
+            } catch (err) {
+                throw new Error('File upload to storage failed');
+            }
+        }
+
+        // Update the main file record to point at the new content.
         const updatedFile = await prisma.file.update({
             where: { id: fileWithSameName.id },
             data: {
-                filename: multerFile.filename,
+                filename: multerFile.originalname,
                 file_size: multerFile.size,
                 mime_type: multerFile.mimetype,
-                storage_path: storagePath, // Use the deduplicated or new path!
-                hash: hash,
+                storage_path: storagePath,
+                hash,
                 uploaded_by: uploadedBy,
+                encryption_iv: encryptionIv,
                 updated_at: new Date(),
             },
         });
 
         void logActivity({
-            teamId,
-            userId: uploadedBy,
-            action: 'file_version_created', // Specific action for versioning
-            targetType: 'file',
-            targetId: updatedFile.id,
+            teamId, userId: uploadedBy,
+            action: 'file_version_created',
+            targetType: 'file', targetId: updatedFile.id,
             metadata: {
                 file_name: updatedFile.original_name,
                 version_created: true,
                 is_duplicate: isDuplicate,
-                duplicate_reason: duplicateReason
+                duplicate_reason: duplicateReason,
             },
-            ip,
-            userAgent,
+            ip, userAgent,
         });
 
-        // Real-time notification via helper
         emitToTeam(teamId, SOCKET_EVENTS.FILE_UPLOADED, {
             file: updatedFile as unknown as Record<string, unknown>,
-            uploadedBy: uploadedBy
+            uploadedBy,
         });
 
         return { file: updatedFile, isDuplicate: false };
     }
 
-    // STEP 6: NO NAME CLASH -> Create a brand-new File record
-    const file = await prisma.file.create({
+    // ─── STEP 7: No name collision → brand-new file ─────────────────────────────
+    // Create the DB record first to get the auto-increment ID for the R2 key.
+    const dbFile = await prisma.file.create({
         data: {
             team_id: teamId,
             folder_id: folderId ?? null,
-            filename: multerFile.filename,
+            filename: multerFile.originalname,
             original_name: multerFile.originalname,
             file_size: multerFile.size,
             mime_type: multerFile.mimetype,
-            storage_path: storagePath,
+            storage_path: 'pending',  // updated below after R2 upload succeeds
             hash,
             uploaded_by: uploadedBy,
             is_deleted: false,
-            encryption_iv: encryptionIv, // ← ADD THIS
+            encryption_iv: encryptionIv,
         },
+    });
+
+    // Upload to R2 only if this is genuinely new content.
+    // Duplicates already have their storagePath set to an existing R2 key above.
+    if (!existingContent) {
+        const objectKey = generateObjectKey(teamId, dbFile.id, multerFile.originalname);
+        try {
+            await r2Upload(bufferToUpload, objectKey, multerFile.mimetype);
+            storagePath = objectKey;
+        } catch (err) {
+            // R2 failed — roll back the DB record so no ghost entry remains.
+            await prisma.file.delete({ where: { id: dbFile.id } });
+            throw new Error('File upload to storage failed');
+        }
+    }
+
+    // Update storage_path from 'pending' to the real R2 object key.
+    const finalFile = await prisma.file.update({
+        where: { id: dbFile.id },
+        data: { storage_path: storagePath },
     });
 
     void logActivity({
-        teamId,
-        userId: uploadedBy,          // your function uses uploadedBy, not userId
+        teamId, userId: uploadedBy,
         action: 'file_uploaded',
-        targetType: 'file',
-        targetId: file.id,
+        targetType: 'file', targetId: finalFile.id,
         metadata: {
-            file_name: file.original_name,   // ← THIS is what the renderer looks for
-            file_size: file.file_size,        // keep for reference but we'll hide it
+            file_name: finalFile.original_name,
+            file_size: finalFile.file_size,
             is_duplicate: isDuplicate,
-            duplicate_reason: duplicateReason
+            duplicate_reason: duplicateReason,
         },
-        ip,
-        userAgent,
+        ip, userAgent,
     });
 
-    // Real-time notification via helper
     emitToTeam(teamId, SOCKET_EVENTS.FILE_UPLOADED, {
-        file: file as unknown as Record<string, unknown>,
-        uploadedBy: uploadedBy
+        file: finalFile as unknown as Record<string, unknown>,
+        uploadedBy,
     });
 
-    return { file, isDuplicate };
+    return { file: finalFile, isDuplicate };
 };
-
 // ===========================================================================
 // SERVICE FUNCTION 2: getTeamFiles
 // ===========================================================================
@@ -438,7 +437,13 @@ export const getFileById = async (
 export async function listFiles(
     teamId: number,
     userId: number,
-    folderId?: number | null  // undefined = no filter, null = root level
+    folderId?: number | null,
+    options?: {
+        mimeType?: string;
+        uploadedBy?: number;
+        sortBy?: 'name' | 'date' | 'size';
+        order?: 'asc' | 'desc';
+    }
 ) {
     // Verify user belongs to this team before returning any data
     const membership = await prisma.teamMember.findFirst({
@@ -468,13 +473,27 @@ export async function listFiles(
             team_id: teamId,
             is_deleted: false,
             ...folderFilter, // spread the dynamic filter in
+            ...(options?.mimeType && { mime_type: { contains: options.mimeType } }),
+            ...(options?.uploadedBy && { uploaded_by: options.uploadedBy }),
         },
         include: {
             uploader: {
                 select: { id: true, username: true, email: true },
             },
         },
-        orderBy: { created_at: 'desc' },
+    });
+
+    // Sort the files dynamically based on options
+    files.sort((a, b) => {
+        const orderMult = options?.order === 'asc' ? 1 : -1;
+        if (options?.sortBy === 'name') {
+            return a.original_name.localeCompare(b.original_name) * orderMult;
+        } else if (options?.sortBy === 'size') {
+            return ((a.file_size || 0) - (b.file_size || 0)) * orderMult;
+        } else {
+            // default to date
+            return (b.created_at.getTime() - a.created_at.getTime()) * orderMult * -1; // b - a is desc. We multiply by -1 if asc
+        }
     });
 
     return files;
@@ -513,33 +532,96 @@ export async function listFiles(
 // It currently returns the storage_path for res.download() or res.sendFile()
 
 // REPLACE the direct file serving with this:
-export async function getFileForDownload(
-    fileId: number,
-    teamId: number,
-    userId: number
-): Promise<{ buffer: Buffer | null; storagePath: string | null; file: PrismaFile }> {
+// --- REPLACE downloadFile in file.service.ts ---
+// PURPOSE: Verify access, then return a readable stream from R2.
+// INPUTS: fileId, userId (to check team membership)
+// OUTPUTS: { stream: Readable, file: File } — controller pipes stream to res
 
-    await assertTeamMember(userId, teamId)
+export async function downloadFileService(fileId: number, userId: number) {
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, is_deleted: false },
+    });
+
+    if (!file) throw new AppError('File not found', 404);
+
+    // Verify the user is a member of the team that owns this file.
+    await assertTeamMember(userId, file.team_id);
+
+    // Get a readable stream from R2 using the stored object key.
+    const stream = await getFileStream(file.storage_path);
+
+    // ─── NEW: Decryption support for downloads ──────────────────────────────
+    // If the file is encrypted, we must decrypt it before sending to the user.
+    // Since our GCM implementation has the tag at the start, we buffer and decrypt.
+    if (file.encryption_iv && isEncryptionEnabled()) {
+        const chunks: any[] = [];
+        for await (const chunk of stream) {
+            chunks.push(chunk);
+        }
+        const encryptedBuffer = Buffer.concat(chunks);
+        const decryptedBuffer = decryptBuffer(encryptedBuffer, file.encryption_iv);
+        
+        // Convert the decrypted buffer back into a stream for the controller
+        const decryptedStream = Readable.from(decryptedBuffer);
+        return { stream: decryptedStream, file };
+    }
+
+    return { stream, file };
+}
+
+/**
+ * PURPOSE: Fetch a file's content for the collaborative editor.
+ * Handles both encrypted and unencrypted files.
+ */
+export async function getFileForDownload(fileId: number, teamId: number, userId: number) {
+    await assertTeamMember(userId, teamId);
 
     const file = await prisma.file.findFirst({
         where: { id: fileId, team_id: teamId, is_deleted: false }
-    })
-    if (!file) throw new AppError('File not found', 404)
+    });
 
-    const absolutePath = path.resolve(file.storage_path)
-    if (!fs.existsSync(absolutePath)) {
-        throw new AppError('File not found on disk', 404)
-    }
+    if (!file) throw new AppError('File not found', 404);
 
-    // If file has an IV, it's encrypted — decrypt to buffer for streaming
-    // If no IV, it's a legacy unencrypted file — serve directly
-    // WHY RETURN BOTH: Controller uses buffer for encrypted, path for unencrypted
+    // For simplicity, we assume the file is on disk if it's not encrypted OR
+    // if we're in a transitional state. In a full R2 setup, we'd fetch the buffer from R2.
+    // However, based on the existing openEditorHandler logic, it expects a storagePath or buffer.
+    const absolutePath = path.resolve(file.storage_path);
+    
+    let buffer: Buffer | null = null;
+    let storagePath: string | null = null;
+
     if (file.encryption_iv && isEncryptionEnabled()) {
-        const buffer = decryptFile(absolutePath, file.encryption_iv)
-        return { buffer, storagePath: null, file }
+        // If it's encrypted, we must decrypt it to a buffer
+        // If it's in R2, we should fetch it first. But let's check if it exists on disk first
+        // to maintain backward compatibility with the user's current disk-based logic.
+        if (fs.existsSync(absolutePath)) {
+            buffer = decryptFile(absolutePath, file.encryption_iv);
+        } else {
+            // Fetch from R2 and decrypt
+            const stream = await getFileStream(file.storage_path);
+            const chunks: any[] = [];
+            for await (const chunk of stream) {
+                chunks.push(chunk);
+            }
+            const encryptedBuffer = Buffer.concat(chunks);
+            buffer = decryptBuffer(encryptedBuffer, file.encryption_iv);
+        }
     } else {
-        return { buffer: null, storagePath: absolutePath, file }
+        // Not encrypted
+        if (fs.existsSync(absolutePath)) {
+            storagePath = absolutePath;
+        } else {
+            // Fetch from R2
+            const stream = await getFileStream(file.storage_path);
+            const chunks: any[] = [];
+            for await (const chunk of stream) {
+                chunks.push(chunk);
+            }
+            buffer = Buffer.concat(chunks);
+        }
     }
+
+    return { buffer, storagePath, file };
 }
 
 // ===========================================================================
@@ -573,7 +655,7 @@ export async function getFileForDownload(
 //   shared. Disk cleanup happens in Week 12 when we implement permanent
 //   delete, at which point we check if any other non-deleted File record
 //   references the same storage_path before calling fs.unlink().
-// ===========================================================================
+//  ===========================================================================
 export const softDeleteFile = async (
     fileId: number,
     userId: number,
@@ -731,42 +813,42 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
             .replace(/\n/g, '<br>')
         const attrs = node.getAttributes()
         let result = text || ''
-        if (attrs.code)      result = `<code>${result}</code>`
-        if (attrs.bold)      result = `<strong>${result}</strong>`
-        if (attrs.italic)    result = `<em>${result}</em>`
+        if (attrs.code) result = `<code>${result}</code>`
+        if (attrs.bold) result = `<strong>${result}</strong>`
+        if (attrs.italic) result = `<em>${result}</em>`
         if (attrs.underline) result = `<u>${result}</u>`
-        if (attrs.strike)    result = `<s>${result}</s>`
+        if (attrs.strike) result = `<s>${result}</s>`
         return result
     }
 
     if (node instanceof Y.XmlFragment) {
-        return Array.from(node as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+        return Array.from(node as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
     }
 
     const el = node as Y.XmlElement
     const tag = el.nodeName
     const attrs = el.getAttributes()
-    const children = Array.from(el as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+    const children = Array.from(el as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
 
     switch (tag) {
-        case 'paragraph':     return `<p>${children || '<br>'}</p>`
+        case 'paragraph': return `<p>${children || '<br>'}</p>`
         case 'heading': {
             const level = Number(attrs.level) || 1
             return `<h${level}>${children}</h${level}>`
         }
-        case 'bulletList':    return `<ul>${children}</ul>`
-        case 'orderedList':   return `<ol>${children}</ol>`
-        case 'listItem':      return `<li>${children}</li>`
-        case 'taskList':      return `<ul class="task-list">${children}</ul>`
+        case 'bulletList': return `<ul>${children}</ul>`
+        case 'orderedList': return `<ol>${children}</ol>`
+        case 'listItem': return `<li>${children}</li>`
+        case 'taskList': return `<ul class="task-list">${children}</ul>`
         case 'taskItem': {
             const checked = attrs.checked ? ' checked' : ''
             return `<li><label><input type="checkbox"${checked} disabled> ${children}</label></li>`
         }
-        case 'blockquote':    return `<blockquote>${children}</blockquote>`
-        case 'codeBlock':     return `<pre><code>${children}</code></pre>`
-        case 'hardBreak':     return '<br>'
-        case 'horizontalRule':return '<hr>'
-        default:              return `<div>${children}</div>`
+        case 'blockquote': return `<blockquote>${children}</blockquote>`
+        case 'codeBlock': return `<pre><code>${children}</code></pre>`
+        case 'hardBreak': return '<br>'
+        case 'horizontalRule': return '<hr>'
+        default: return `<div>${children}</div>`
     }
 }
 
@@ -814,9 +896,10 @@ export const getFilePreview = async (
     if (!file) throw new AppError('File not found', 404);
 
     const absolutePath = path.resolve(file.storage_path);
-    if (!fs.existsSync(absolutePath)) {
-        throw new AppError('File missing from disk', 500);
-    }
+    const existsOnDisk = fs.existsSync(absolutePath);
+    
+    // If not on disk, we'll try to fetch from R2 later if needed.
+    // We don't throw yet because collaborative types don't need the disk file.
 
     const mime = file.mime_type.toLowerCase();
 
@@ -842,7 +925,17 @@ export const getFilePreview = async (
     // We only NEED the buffer immediately for DOCX/XLSX/Text.
     // For PDFs/Images, we only need the buffer if it's encrypted.
     if (file.encryption_iv && isEncryptionEnabled()) {
-        fileBuffer = decryptFile(absolutePath, file.encryption_iv);
+        if (existsOnDisk) {
+            fileBuffer = decryptFile(absolutePath, file.encryption_iv);
+        } else {
+            // Fetch from R2 and decrypt
+            const r2Stream = await getFileStream(file.storage_path);
+            const chunks: any[] = [];
+            for await (const chunk of r2Stream) {
+                chunks.push(chunk);
+            }
+            fileBuffer = decryptBuffer(Buffer.concat(chunks), file.encryption_iv);
+        }
     }
 
     // Direct streams
@@ -868,7 +961,17 @@ export const getFilePreview = async (
 
     // For all other types (DOCX, XLSX, Text), we need the buffer regardless.
     if (!fileBuffer) {
-        fileBuffer = fs.readFileSync(absolutePath);
+        if (existsOnDisk) {
+            fileBuffer = fs.readFileSync(absolutePath);
+        } else {
+            // Fetch from R2
+            const r2Stream = await getFileStream(file.storage_path);
+            const chunks: any[] = [];
+            for await (const chunk of r2Stream) {
+                chunks.push(chunk);
+            }
+            fileBuffer = Buffer.concat(chunks);
+        }
     }
 
     // DOCX conversion

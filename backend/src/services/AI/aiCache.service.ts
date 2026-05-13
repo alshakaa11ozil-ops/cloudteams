@@ -41,7 +41,7 @@ export async function getCachedResult(
     targetId: number | null = null
 ): Promise<{ result: string; cachedAt: Date } | null> {
 
-    const cached = await prisma.aiCache.findFirst({
+    const cached = await prisma.ai_cache.findFirst({
         where: {
             team_id: teamId,
             feature,
@@ -84,7 +84,7 @@ export async function setCachedResult(
 
     // Prisma's upsert does not support null values in composite unique keys.
     // We use a findFirst + conditional write to safely handle targetId being null.
-    const existing = await prisma.aiCache.findFirst({
+    const existing = await prisma.ai_cache.findFirst({
         where: {
             team_id: teamId,
             feature,
@@ -93,7 +93,7 @@ export async function setCachedResult(
     })
 
     if (existing) {
-        await prisma.aiCache.update({
+        await prisma.ai_cache.update({
             where: { id: existing.id },
             data: {
                 result,
@@ -102,7 +102,7 @@ export async function setCachedResult(
             }
         })
     } else {
-        await prisma.aiCache.create({
+        await prisma.ai_cache.create({
             data: {
                 team_id: teamId,
                 feature,

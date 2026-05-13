@@ -3,6 +3,7 @@
 import { Request, Response } from 'express';
 import { searchTeamContent } from '../services/search.service';
 import { AppError } from '../utils/teamGuard';
+import { parseSmartQuery } from '../services/AI/smartSearch.service';
 // ─────────────────────────────────────────────
 // CONTROLLER: searchHandler
 // Route: GET /api/search?query=...&teamId=...&type=...&since=...
@@ -14,13 +15,20 @@ export async function searchHandler(req: Request, res: Response) {
         const userId = req.user!.userId;
 
         // All query params arrive as strings — we must parse and validate them
-        const { query, teamId: teamIdRaw, type: typeRaw, since: sinceRaw } = req.query;
+        const { 
+            query, 
+            teamId: teamIdRaw, 
+            type: typeRaw, 
+            since: sinceRaw,
+            mimeType: mimeTypeRaw,
+            uploadedBy: uploadedByRaw,
+            folderId: folderIdRaw,
+            sortBy: sortByRaw,
+            order: orderRaw
+        } = req.query;
 
-        // Validate required params
-        if (!query || typeof query !== 'string') {
-            res.status(400).json({ error: 'query param is required' });
-            return;
-        }
+        // Query can be empty for smart searches with filters, handled in service.
+        const queryStr = (query as string) || '';
 
         if (!teamIdRaw) {
             res.status(400).json({ error: 'teamId param is required' });
@@ -51,7 +59,48 @@ export async function searchHandler(req: Request, res: Response) {
             // If invalid date string, silently ignore it — don't crash the search
         }
 
-        const result = await searchTeamContent({ query, teamId, userId, type, since });
+        // Parse advanced filters
+        let uploadedBy: number | undefined;
+        if (uploadedByRaw) {
+            const parsed = parseInt(uploadedByRaw as string, 10);
+            if (!isNaN(parsed)) uploadedBy = parsed;
+        }
+        
+        let mimeType = mimeTypeRaw as string | undefined;
+        let finalQuery = queryStr;
+
+        // --- SMART SEARCH INTERCEPTION ---
+        if (req.query.smart === 'true') {
+            const smartParams = await parseSmartQuery(finalQuery, teamId, userId);
+            finalQuery = smartParams.query;
+            if (smartParams.mimeType) mimeType = smartParams.mimeType;
+            if (smartParams.uploadedBy) uploadedBy = smartParams.uploadedBy;
+        }
+
+        let folderId: number | null | undefined;
+        if (folderIdRaw !== undefined) {
+            if (folderIdRaw === 'null') folderId = null;
+            else {
+                const parsed = parseInt(folderIdRaw as string, 10);
+                if (!isNaN(parsed)) folderId = parsed;
+            }
+        }
+
+        const sortBy = (sortByRaw as 'name' | 'date' | 'size') || 'date';
+        const order = (orderRaw as 'asc' | 'desc') || 'desc';
+
+        const result = await searchTeamContent({ 
+            query: finalQuery, 
+            teamId, 
+            userId, 
+            type, 
+            since,
+            mimeType: mimeType as string | undefined,
+            uploadedBy,
+            folderId,
+            sortBy,
+            order
+        });
 
         res.status(200).json(result);
     } catch (error) {

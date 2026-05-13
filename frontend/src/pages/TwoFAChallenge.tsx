@@ -9,8 +9,8 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '@/hooks/useAuth'
-import { verify2FA } from '@/api/auth'
+import { useAuth } from '../hooks/useAuth'
+import { verify2FA } from '../api/auth'
 
 export default function TwoFAChallenge() {
     const navigate = useNavigate()

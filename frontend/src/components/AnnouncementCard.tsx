@@ -14,8 +14,8 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { deleteAnnouncement, updateAnnouncement } from '@/api/announcements'
-import type { Announcement } from '@/types'
+import { deleteAnnouncement, updateAnnouncement } from '../api/announcements'
+import type { Announcement } from '../types'
 
 interface AnnouncementCardProps {
     announcement: Announcement

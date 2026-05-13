@@ -29,7 +29,7 @@
 //   POST /api/teams/:teamId/files/:fileId/unlock  → { message, success }
 //   GET  /api/teams/:teamId/files/:fileId/lock-status → { isLocked, lockedBy, ... }
 
-import api from '@/api/axios'
+import api from '../api/axios'
 import type {
   CloudFile,
   Folder,
@@ -46,7 +46,8 @@ import type {
   FilePreviewResponse,
   SharedLink,
   Announcement,
-} from '@/types'
+  DocumentSummary,
+} from '../types'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FILE FUNCTIONS
@@ -72,7 +73,13 @@ import type {
 // ---------------------------------------------------------------------------
 export async function fetchFiles(
   teamId: number,
-  folderId?: number | null
+  folderId?: number | null,
+  options?: {
+    mimeType?: string;
+    uploadedBy?: number;
+    sortBy?: 'name' | 'date' | 'size';
+    order?: 'asc' | 'desc';
+  }
 ): Promise<CloudFile[]> {
   // Build the query string dynamically based on folderId value
   // We must convert null → string "null" because URL query params are strings
@@ -88,6 +95,11 @@ export async function fetchFiles(
     params.folderId = String(folderId) // signals backend: show this folder
   }
   // If folderId is undefined → no param sent → backend returns all team files
+
+  if (options?.mimeType) params.mimeType = options.mimeType
+  if (options?.uploadedBy) params.uploadedBy = String(options.uploadedBy)
+  if (options?.sortBy) params.sortBy = options.sortBy
+  if (options?.order) params.order = options.order
 
   const res = await api.get(`/files/teams/${teamId}/files`, { params })
   return res.data.files  // backend wraps array in { files: [...] }
@@ -480,11 +492,26 @@ export async function fetchLockStatus(
 // ---------------------------------------------------------------------------
 export async function searchFiles(
   teamId: number,
-  query: string
-): Promise<{ files: CloudFile[]; folders: Folder[] }> {
-  const res = await api.get('/search', {
-    params: { teamId: String(teamId), query, type: 'all' },
-  })
+  query: string,
+  options?: {
+    mimeType?: string;
+    uploadedBy?: number;
+    folderId?: number | null;
+    sortBy?: 'name' | 'date' | 'size';
+    order?: 'asc' | 'desc';
+    type?: 'files' | 'folders' | 'all';
+    smart?: boolean;
+  }
+): Promise<{ files: CloudFile[]; folders: Folder[]; documents: DocumentSummary[] }> {
+  const params: Record<string, string> = { teamId: String(teamId), query, type: options?.type || 'all' }
+  if (options?.mimeType) params.mimeType = options.mimeType
+  if (options?.uploadedBy) params.uploadedBy = String(options.uploadedBy)
+  if (options?.folderId !== undefined) params.folderId = String(options.folderId)
+  if (options?.sortBy) params.sortBy = options.sortBy
+  if (options?.order) params.order = options.order
+  if (options?.smart) params.smart = 'true'
+
+  const res = await api.get('/search', { params })
 
   // Backend returns a combined { results: [...] } array where items have a `resultType`
   const allResults = res.data.results || []
@@ -501,17 +528,32 @@ export async function searchFiles(
       uploader: r.uploadedBy
     })) as CloudFile[]
 
+  const documents = allResults
+    .filter((r: any) => r.resultType === 'document')
+    .map((r: any) => ({
+      id: r.id,
+      title: r.title,
+      folderId: r.folderId,
+      createdBy: r.createdBy,
+      creatorName: r.creatorName,
+      lastSaved: r.lastSaved,
+      updatedAt: r.updatedAt,
+    })) as DocumentSummary[]
+
   const folders = allResults
     .filter((r: any) => r.resultType === 'folder')
     .map((r: any) => ({
       id: r.id,
+      team_id: Number(teamId),
+      parent_folder_id: r.folderId,
       name: r.name,
-      parent_folder_id: r.parentFolderId,
-      created_by: r.createdBy,
-      created_at: r.createdAt
+      created_by: r.uploadedBy, // backend sets uploadedBy for folder creator
+      is_deleted: false,
+      created_at: r.createdAt,
+      updated_at: r.updatedAt,
     })) as Folder[]
 
-  return { files, folders }
+  return { files, folders, documents }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -597,9 +639,30 @@ export async function fetchActivity(
 // ─────────────────────────────────────────────────────────────────────────────
 // ANALYTICS
 // ─────────────────────────────────────────────────────────────────────────────
-export async function fetchAnalytics(teamId: number): Promise<AnalyticsResult> {
-  const res = await api.get(`/teams/${teamId}/analytics`)
+export async function fetchAnalytics(
+  teamId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<AnalyticsResult> {
+  const params: Record<string, string> = {}
+  if (startDate) params.startDate = startDate
+  if (endDate) params.endDate = endDate
+
+  const res = await api.get(`/teams/${teamId}/analytics`, { params })
   return res.data
+}
+
+export async function fetchAnalyticsSummary(
+  teamId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<string> {
+  const params: Record<string, string> = {}
+  if (startDate) params.startDate = startDate
+  if (endDate) params.endDate = endDate
+
+  const res = await api.get(`/teams/${teamId}/analytics/summary`, { params })
+  return res.data.summary
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // RECYCLE BIN

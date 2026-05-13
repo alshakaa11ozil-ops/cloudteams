@@ -9,8 +9,8 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { fetchTeams } from '@/api/teams'
-import type { Team, TeamRole } from '@/types'
+import { fetchTeams } from '../api/teams'
+import type { Team, TeamRole } from '../types'
 
 // ─── ROLE BADGE ────────────────────────────────────────────────────────────
 //

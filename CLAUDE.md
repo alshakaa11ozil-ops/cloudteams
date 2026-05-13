@@ -343,4 +343,274 @@ Every function must have:
 Every non-obvious line must have an inline comment explaining the WHY.
 
 ---
+# CLOUDTEAMS — PROJECT CONTEXT FOR CLAUDE
 
+## Project Identity
+**Project:** CloudTeams — AI-powered team cloud storage platform
+**University:** Zhejiang University of Science and Technology
+**Type:** Graduation Project (Solo, 16 weeks)
+**Stack:** React 18 + Vite + TypeScript + Tailwind / Node.js + Express + TypeScript + PostgreSQL + Prisma 7
+
+---
+
+## Completed Weeks
+- **Week 1:** GitHub repo, tools installed, databases created
+- **Week 2:** Express server, PostgreSQL connected, Prisma 7 with pg adapter, 9 tables + announcements via migrations, health check endpoint
+- **Week 3:** Full JWT authentication — register, login, getMe, auth middleware, bcrypt, rate limiting
+- **Week 4:** Team Workspaces, Role-Based Permissions (viewer/editor/admin), Announcements feature, requireRole middleware
+- **Week 5:** File Storage — upload, download, list, get metadata, soft delete, SHA-256 deduplication
+- **Week 5 bonus:** TOTP-based 2FA — setup, QR code, verify-setup, login challenge (tempToken pattern), disable
+- **Week 6:** Folder management, file browsing by folder, search (ILIKE, parallel queries)
+- **Week 7:** Comments + @Mentions, File Version History, Recycle Bin (soft + hard delete)
+- **Week 8:** Soft File Locking (Lease Model) — atomic acquire, heartbeat, releaseLock, forceUnlock, Socket.io real-time events, cron auto-expire
+- **Week 9:** Activity Feed (paginated, filterable) + Team Analytics Dashboard
+- **Week 10:** Logout with JWT blacklist + Shared Links (file + team share, password, expiry, download limits)
+- **Week 11:** Frontend foundation — Vite + React + TypeScript + Tailwind, React Router, Axios JWT interceptor, AuthContext, ProtectedRoute, Layout, Login, Register, TwoFA, TeamList, CreateTeam, TeamDashboard shell
+- **Week 12:** File Browser UI — FileBrowser (two-panel, URL-driven navigation), FolderTree (recursive adjacency-list tree), FileList (grid with per-card lock status), FileUploadZone (drag-drop + progress), LockBanner, CreateFolderModal, MoveModal (circular-move prevention), DeleteFolderDialog (three-mode delete), useLockManager hook (acquire → heartbeat → cleanup release), all API functions in files.ts
+- **Week 13:** Collaboration UI — FileDetailSidebar (Preview/Comments/Versions/Lock/Sharing tabs), ActivityFeed page, AnalyticsDashboard (recharts), RecycleBin page, Announcements UI (AnnouncementCard, AnnouncementModal, wired in TeamDashboard), Document preview endpoint (mammoth DOCX→HTML, PDF inline, image inline)
+- **Week 14 (Part 1 — original):** Share Links + AI Features + Team Admin + Real-time
+  - ShareLinkModal + PublicSharePage + publicAxios (no-JWT instance)
+  - Gemini/agentrouter AI: digest (6h cache), file summary (24h cache), duplicate explain (30min cache)
+  - AI cache table (ai_cache) with per-feature cooldown system
+  - Team Settings: rename, member role management, danger zone delete
+  - User Settings: username update, password change
+  - Socket.io expansion: socketEvents.ts constants, useTeamSocket hook in Layout
+  - emitToTeam in all services: file, folder, recycle, team, share, announcement
+  - Toast notifications across all mutations
+  - AES-256-GCM file encryption (fileEncryption.ts, encryption_iv field on File)
+- **Week 14 (Part 2 — collaborative editor):** Full real-time collaborative editor
+  - Hocuspocus server (bare class, not Server wrapper) on same port as Express
+  - server.ts: ws.Server with noServer:true, httpServer 'upgrade' routing
+  - hocuspocus.ts: onAuthenticate (JWT + team), Database.fetch/store (yjs_state),
+    onChange (rate limit + 5MB cap), onDisconnect (cleanup), compactYjsState
+  - CollaborativeEditor.tsx: useState + destroyed flag (fixes Strict Mode),
+    Outer + Inner split, url directly (no HocuspocusProviderWebsocket)
+  - EditorToolbar, AskAIPopover, PresenceBar, editor.css
+  - DocumentEditor.tsx: dual mode (file/doc), inline title edit, Export .docx
+  - exportDocx.ts: TipTap JSON → docx library, bulletList/orderedList fixed
+  - Document CRUD: document.service/controller/routes
+  - FileBrowser: Documents section + New Document button
+  - AI editor assist: editorAssist.service/controller/routes (agentrouter)
+  - Day 6 reliability: zombie token check, reconnect backoff, beforeunload,
+    hasRealContent guard, updateMany, rate limit Map + cleanup
+
+---
+
+## Backend File Structure
+src/
+config/
+database.ts              ✅ Prisma client singleton
+multer.ts                ✅ disk storage, 50MB limit
+socketEvents.ts          ✅ All Socket.io event name constants
+collaboration/
+hocuspocus.ts            ✅ Hocuspocus server instance (bare Hocuspocus class)
+controllers/
+auth.controller.ts       ✅ register, login, getMe, logout, updateProfile, changePassword
+teamController.ts        ✅ CRUD + invite + updateTeam + deleteTeam
+announcementController.ts ✅
+file.controller.ts       ✅ upload, download, list, delete, rename, preview, openEditor
+twoFactor.controller.ts  ✅
+folderController.ts      ✅
+searchController.ts      ✅
+comment.controller.ts    ✅
+version.controller.ts    ✅
+recycleBin.controller.ts ✅
+lock.controller.ts       ✅
+share.controller.ts      ✅
+digest.controller.ts     ✅
+aiSummary.controller.ts  ✅
+document.controller.ts   ✅
+editorAssist.controller.ts ✅
+middleware/
+auth.middleware.ts       ✅
+requireRole.ts           ✅
+routes/
+auth.ts                  ✅
+health.ts                ✅
+teamRoutes.ts            ✅
+announcementRoutes.ts    ✅
+fileRoutes.ts            ✅
+folderRoutes.ts          ✅
+searchRoutes.ts          ✅
+lock.routes.ts           ✅
+versionRoutes.ts         ✅
+activityRoutes.ts        ✅
+analyticsRoutes.ts       ✅
+digestRoutes.ts          ✅
+documentRoutes.ts        ✅
+editorAssistRoutes.ts    ✅
+shareRoutes.ts           ✅
+services/
+auth.service.ts          ✅
+teamService.ts           ✅ + emitToTeam
+announcementService.ts   ✅ + emitToTeam
+file.service.ts          ✅ + emitToTeam + explainDuplicate
+twoFactor.service.ts     ✅
+folder.service.ts        ✅ + emitToTeam
+search.service.ts        ✅
+comment.service.ts       ✅
+version.service.ts       ✅
+recycleBin.service.ts    ✅ + emitToTeam
+lock.service.ts          ✅
+share.service.ts         ✅ + emitToTeam
+document.service.ts      ✅ createDocument, listDocuments, getDocument, renameDocument, softDeleteDocument
+ai/
+gemini.ts              ✅ callGemini() — OpenAI-compatible, agentrouter.org
+aiCache.service.ts     ✅ getCachedResult + setCachedResult
+digest.service.ts      ✅ generateDigest — 600 tokens, 6h cache
+fileSummary.service.ts ✅ summarizeFile — 350 tokens, 24h cache
+duplicateExplain.service.ts ✅ explainDuplicate — 150 tokens, 30min cache
+editorAssist.service.ts ✅ 5 presets + custom, in-memory rate limit 5/min/team
+utils/
+jwt.ts                   ✅
+hash.ts                  ✅
+teamGuard.ts             ✅
+activityLogger.ts        ✅
+fileEncryption.ts        ✅ AES-256-GCM encrypt/decrypt
+socket.ts                  ✅ initSocket, getIO, emitToTeam, setIo, getIo
+server.ts                  ✅ + ws.Server noServer, httpServer upgrade routing
+
+## Frontend File Structure
+frontend/src/
+api/
+axios.ts                 ✅ JWT interceptor
+publicAxios.ts           ✅ No-JWT for public routes
+files.ts                 ✅ All file/folder/lock/search/summary API functions
+teams.ts                 ✅ + updateTeam, updateMemberRole, removeMember, deleteTeam, generateTeamDigest
+announcements.ts         ✅
+shares.ts                ✅
+socket.ts                ✅ Shared socket.io-client instance
+documents.ts             ✅ createDocument, fetchDocuments, fetchDocument, renameDocument, deleteDocument
+config/
+socketEvents.ts          ✅ Copy of backend constants
+context/
+AuthContext.tsx          ✅
+hooks/
+useAuth.ts               ✅
+useLockManager.ts        ✅
+useTeamSocket.ts         ✅ All team real-time events — mounted in Layout
+components/
+ProtectedRoute.tsx       ✅
+Layout.tsx               ✅
+FolderTree.tsx           ✅
+FileList.tsx             ✅
+FileUploadZone.tsx       ✅
+LockBanner.tsx           ✅
+CreateFolderModal.tsx    ✅
+MoveModal.tsx            ✅
+DeleteFolderDialog.tsx   ✅
+ShareLinkModal.tsx       ✅
+AnnouncementCard.tsx     ✅
+AnnouncementModal.tsx    ✅
+FileDetailSidebar.tsx    ✅
+editor/
+CollaborativeEditor.tsx ✅ Outer (provider lifecycle) + Inner (TipTap)
+EditorToolbar.tsx       ✅ 16 buttons
+AskAIPopover.tsx        ✅ 5 presets + custom prompt
+PresenceBar.tsx         ✅ Yjs Awareness Protocol
+editor.css              ✅ ProseMirror + cursor styles
+pages/
+auth/
+Login.tsx              ✅
+Register.tsx           ✅
+TwoFAChallenge.tsx     ✅
+teams/
+TeamList.tsx           ✅
+CreateTeam.tsx         ✅
+TeamDashboard.tsx      ✅
+FileBrowser.tsx        ✅ + Documents section
+ActivityFeed.tsx       ✅
+AnalyticsDashboard.tsx ✅
+RecycleBin.tsx         ✅
+TeamSettings.tsx       ✅
+share/
+PublicSharePage.tsx    ✅
+DocumentEditor.tsx       ✅ Full-screen editor page (OUTSIDE Layout)
+UserSettings.tsx         ✅
+utils/
+exportDocx.ts            ✅ TipTap JSON → .docx → browser download
+types/
+index.ts                 ✅
+App.tsx                    ✅
+main.tsx                   ✅
+
+---
+
+## Database Schema — All Tables
+- **User:** id, username, email, password_hash, two_factor_secret, created_at, updated_at
+- **Team:** id, name, description, owner_id, created_at, updated_at
+- **TeamMember:** id, team_id, user_id, role, created_at
+- **Folder:** id, team_id, parent_folder_id, name, created_by, is_deleted, deleted_at, created_at, updated_at
+- **File:** id, team_id, folder_id, filename, original_name, file_size, mime_type, storage_path, hash, uploaded_by, is_deleted, deleted_at, created_at, updated_at, lockOwnerUserId, lockToken, lockExpiresAt, editingStartedAt, yjs_state (Bytes), yjs_last_saved, encryption_iv
+- **FileVersion:** id, file_id, version_number, storage_path, file_size, uploaded_by, created_at
+- **Comment:** id, file_id, team_id, user_id, content, resolved, is_deleted, deleted_at, created_at, updated_at
+- **ActivityLog:** id, team_id, user_id, action, target_type, target_id, metadata, ip, userAgent, created_at
+- **SharedLink:** id, file_id, team_id, created_by, token, password_hash, expiration_date, download_limit, downloads_count, created_at
+- **Announcement:** id, teamId, authorId, title, body, isPinned, createdAt, updatedAt (camelCase — Prisma preserves schema names)
+- **TokenBlacklist:** id, token, expires_at, created_at
+- **AiCache:** id, team_id, feature, target_id, result, created_at, expires_at
+- **Document:** id, team_id, folder_id, title, created_by, yjs_state (Bytes), yjs_last_saved, last_saved, is_deleted, deleted_at, created_at, updated_at
+
+---
+
+## Architecture Rules — Never Break These
+- routes/ → controllers/ → services/ → prisma
+- Controllers: thin — read req, call service, send res
+- Services: all business logic, throw typed errors
+- `assertTeamMember(userId, teamId, minimumRole?)` — returns TeamMember object
+- `void logActivity(...)` — fire and forget, never await
+- `emitToTeam(teamId, SOCKET_EVENTS.X, payload)` — fire and forget
+- `prisma.$transaction(async tx => {...})` for multi-step atomic operations
+- `req.user!.userId` — never `.id`
+- Always `parseInt(param, 10)` for all route params
+- Always `return` after every `res.json()` inside if blocks
+- Hocuspocus: `handleConnection(ws, request)` — NO manual ws.on() after this
+
+## Frontend Patterns — Never Break These
+- All API calls through `src/api/axios.ts` — never raw fetch()
+- Public routes use `src/api/publicAxios.ts`
+- Token in localStorage key `cloudteams_token`
+- `useAuth()` hook — never access AuthContext directly
+- React Query for all GET requests
+- Every page: loading state, error state, empty state
+- URL-driven navigation for folder state
+- `void queryClient.invalidateQueries(...)` after every mutation success
+- `useTeamSocket` mounted in Layout — never add team socket listeners in pages
+- Toast on every mutation success AND error
+- Editor routes OUTSIDE <Layout /> wrapper in App.tsx
+- CollaborativeEditor: useState + destroyed flag — never useRef or useMemo for providers
+
+## Critical Rules Learned (Week 14 additions)
+- React 18 Strict Mode runs every useEffect TWICE — destroyed flag is required
+- HocuspocusProviderWebsocket connects immediately on construction — use url directly
+- handleConnection(ws, request) returns void — never call .handleMessage on it
+- StarterKit MUST have history: false when using Collaboration extension
+- Extensions array in useEditor MUST be in useMemo — prevents re-init on every render
+- updateMany not update in Hocuspocus store() — avoids P2025 throw
+- hasRealContent() guard — prevents empty Yjs state from overwriting real content
+- destroyUpgrade: false in Socket.io config — prevents it from killing /collaboration upgrades
+- setBundle(null) before provider.destroy() — unmounts TipTap before ydoc is freed
+- TipTap JSON not getHTML for export — docx library needs structured node tree
+- bulletList fix: children.flatMap(listItem → para.map) not convertNode wrapper
+- orderedList: define levels 0-3 in numbering config
+- agentrouter.org uses OpenAI-compatible API format (messages not contents)
+- AI_BASE_URL, AI_API_KEY, AI_MODEL in .env — model switch = config change only
+
+## Tech Stack
+- **Backend:** Node.js + Express + TypeScript, port 3001
+- **ORM:** Prisma 7 with @prisma/adapter-pg
+- **Database:** PostgreSQL, database name: cloudteams_dev
+- **Generated client:** src/generated/prisma
+- **Prisma singleton:** src/config/database.ts
+- **Auth:** JWT 7-day tokens, payload: { userId, email }
+- **Frontend:** React 18 + Vite + TypeScript + Tailwind CSS, port 5173
+- **HTTP:** Axios with JWT interceptor + publicAxios without
+- **State:** React Context (auth) + React Query (server state)
+- **Real-time:** Socket.io + Hocuspocus (WebSocket, same port, different path)
+- **Editor:** TipTap + Yjs CRDT + Hocuspocus (collaborative editing)
+- **Charts:** recharts
+- **Toast:** react-hot-toast
+- **AI:** agentrouter.org → deepseek-v3.1 (OpenAI-compatible format)
+- **AI Cache:** ai_cache PostgreSQL table via Prisma
+- **Encryption:** AES-256-GCM via Node.js crypto
+- **Project location:** C:\Users\alsha\Desktop\gproject\cloudteams\cloudteams

@@ -11,8 +11,8 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import api from '@/api/axios'
-import { useAuth } from '@/hooks/useAuth'
+import api from '../api/axios'
+import { useAuth } from '../hooks/useAuth'
 
 export default function TwoFASetup() {
     const navigate = useNavigate()
@@ -108,7 +108,7 @@ export default function TwoFASetup() {
             // We now use the tempToken from sessionStorage
             const tempToken = sessionStorage.getItem('cloudteams_temp_token')
 
-            const response = await api.post('/auth/2fa/verify-setup', 
+            const response = await api.post('/auth/2fa/verify-setup',
                 { secret: setupData!.secret, code },
                 { headers: { Authorization: `Bearer ${tempToken}` } }
             )

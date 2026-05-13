@@ -1,10 +1,11 @@
-// src/pages/RecycleBin.tsx
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchRecycleBin, restoreFile, restoreFolder, hardDeleteFile, hardDeleteFolder, emptyRecycleBin } from '@/api/files'
-import { restoreDocument, hardDeleteDocument } from '@/api/documents'
+import { fetchRecycleBin, restoreFile, restoreFolder, hardDeleteFile, hardDeleteFolder, emptyRecycleBin } from '../api/files'
+import { restoreDocument, hardDeleteDocument } from '../api/documents'
+import { fetchTeam } from '../api/teams'
+import { useAuth } from '../hooks/useAuth'
 import { format } from 'date-fns'
-import type { CloudFile, Folder } from '@/types'
+import type { CloudFile, Folder } from '../types'
 import toast from 'react-hot-toast'
 
 function formatBytes(bytes: number) {
@@ -19,12 +20,22 @@ export default function RecycleBin() {
     const { id } = useParams<{ id: string }>()
     const teamId = parseInt(id || '0', 10)
     const queryClient = useQueryClient()
+    const { user } = useAuth()
+
+    const { data: team } = useQuery({
+        queryKey: ['team', teamId],
+        queryFn: () => fetchTeam(teamId),
+        enabled: teamId > 0,
+    })
 
     const { data, isLoading, isError } = useQuery({
         queryKey: ['recycleBin', teamId],
         queryFn: () => fetchRecycleBin(teamId),
         enabled: teamId > 0,
     })
+
+    // Role check: Only Owner or Admin can empty the bin
+    const canEmptyBin = team?.owner_id === user?.id || team?.myRole === 'admin'
 
     const invalidate = () => queryClient.invalidateQueries({ queryKey: ['recycleBin', teamId] })
 
@@ -94,20 +105,22 @@ export default function RecycleBin() {
                     <h1 className="text-2xl font-bold text-slate-900">Recycle Bin</h1>
                     <p className="text-sm text-slate-500 mt-1">Items deleted from the team workspace</p>
                 </div>
-                <div>
-                    <button
-                        onClick={() => {
-                            if (window.confirm('Are you sure you want to permanently delete ALL items in the Recycle Bin? This cannot be undone.')) {
-                                emptyBinMut.mutate()
-                            }
-                        }}
-                        disabled={isEmpty || emptyBinMut.isPending}
-                        className="flex items-center gap-2 bg-red-50 text-red-600 hover:bg-red-100 px-4 py-2 rounded-lg text-sm font-bold border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        {emptyBinMut.isPending ? 'Emptying...' : 'Empty Recycle Bin'}
-                    </button>
-                </div>
+                {canEmptyBin && (
+                    <div>
+                        <button
+                            onClick={() => {
+                                if (window.confirm('Are you sure you want to permanently delete ALL items in the Recycle Bin? This cannot be undone.')) {
+                                    emptyBinMut.mutate()
+                                }
+                            }}
+                            disabled={isEmpty || emptyBinMut.isPending}
+                            className="flex items-center gap-2 bg-red-50 text-red-600 hover:bg-red-100 px-4 py-2 rounded-lg text-sm font-bold border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            {emptyBinMut.isPending ? 'Emptying...' : 'Empty Recycle Bin'}
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Content */}

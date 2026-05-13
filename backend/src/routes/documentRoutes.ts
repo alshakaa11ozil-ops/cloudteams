@@ -19,6 +19,7 @@
 
 import { Router } from 'express'
 import { authenticate } from '../middleware/auth.middleware'
+import documentVersionRoutes from './documentVersionRoutes'
 import {
     createDocument,
     listDocuments,
@@ -27,7 +28,11 @@ import {
     moveDocument,
     deleteDocument,
     previewDocument,
+    lockDocument,
+    unlockDocument,
+    forceUnlockDocument,
 } from '../controllers/document.controller'
+import { createDocumentLinkHandler, listDocumentLinksHandler, deleteShareLinkForDocHandler } from '../controllers/share.controller'
 
 const router = Router({ mergeParams: true })
 
@@ -45,5 +50,18 @@ router.patch('/:docId', renameDocument)
 router.patch('/:docId/rename', renameDocument) // Alias for consistency with files
 router.patch('/:docId/move', moveDocument)
 router.delete('/:docId', deleteDocument)
+
+// Share routes
+router.post('/:docId/share', createDocumentLinkHandler)
+router.get('/:docId/shares', listDocumentLinksHandler)
+router.delete('/:docId/shares/:token', deleteShareLinkForDocHandler)
+
+// Lock routes
+router.post('/:docId/lock', lockDocument)
+router.post('/:docId/unlock', unlockDocument)
+router.post('/:docId/force-unlock', forceUnlockDocument)
+
+// Mount versioning routes
+router.use('/', documentVersionRoutes)
 
 export default router

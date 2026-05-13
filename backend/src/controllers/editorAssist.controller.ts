@@ -36,7 +36,7 @@ export async function editorAssistHandler(req: Request, res: Response): Promise<
 
         const validInstructions = [
             'make_professional', 'summarize', 'fix_grammar',
-            'make_shorter', 'make_longer', 'custom'
+            'make_shorter', 'make_longer', 'make_bullet_points', 'custom'
         ]
         if (!validInstructions.includes(instruction)) {
             res.status(400).json({

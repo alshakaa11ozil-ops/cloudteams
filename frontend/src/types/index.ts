@@ -106,6 +106,8 @@ export interface DocumentSummary {
   createdAt: string
   updatedAt: string
   deletedAt?: string | null
+  lockOwnerUserId?: number | null
+  lockExpiresAt?: string | null
 }
 
 export interface CloudFile {
@@ -285,6 +287,17 @@ export interface AnalyticsResult {
     folder_id: number;
     folder_name: string;
     file_count: number;
+  }>;
+  largestFiles: Array<{
+    file_id: number;
+    original_name: string;
+    file_size: number;
+    file_size_formatted: string;
+  }>;
+  activityByType: Array<{
+    day: string;
+    action: string;
+    count: number;
   }>;
 }
 

@@ -7,7 +7,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getInviteCode, regenerateInviteCode } from '@/api/teams'
+import { getInviteCode, regenerateInviteCode } from '../api/teams'
 import { toast } from 'react-hot-toast'
 
 interface InviteBoxProps {

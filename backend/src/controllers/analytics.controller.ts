@@ -7,6 +7,7 @@
 
 import { Request, Response } from 'express';
 import { getTeamAnalytics } from '../services/analytics.service';
+import { generateAnalyticsSummary } from '../services/AI/analyticsSummary.service';
 import { assertTeamMember } from '../utils/teamGuard';
 
 // ════════════════════════════════════════════════════════════
@@ -35,7 +36,9 @@ export async function getAnalyticsHandler(
         await assertTeamMember(req.user!.userId, teamId);
 
         // ── Call service ────────────────────────────────────
-        const result = await getTeamAnalytics(teamId);
+        const startDate = req.query.startDate as string | undefined;
+        const endDate = req.query.endDate as string | undefined;
+        const result = await getTeamAnalytics(teamId, startDate, endDate);
 
         res.status(200).json(result);
 
@@ -48,5 +51,40 @@ export async function getAnalyticsHandler(
         }
         console.error('[analytics.controller] unexpected error:', err);
         res.status(500).json({ error: 'Failed to fetch analytics' });
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// HANDLER: getAnalyticsSummaryHandler
+// PURPOSE: GET /api/teams/:teamId/analytics/summary
+// ════════════════════════════════════════════════════════════
+export async function getAnalyticsSummaryHandler(
+    req: Request,
+    res: Response
+): Promise<void> {
+    try {
+        const teamId = parseInt(String(req.params.id), 10);
+        if (isNaN(teamId)) {
+            res.status(400).json({ error: 'Invalid team ID' });
+            return;
+        }
+
+        await assertTeamMember(req.user!.userId, teamId);
+
+        const startDate = req.query.startDate as string | undefined;
+        const endDate = req.query.endDate as string | undefined;
+        
+        const summary = await generateAnalyticsSummary(teamId, startDate, endDate);
+
+        res.status(200).json({ summary });
+
+    } catch (err: unknown) {
+        if (err instanceof Error && 'statusCode' in err) {
+            const appErr = err as Error & { statusCode: number };
+            res.status(appErr.statusCode).json({ error: appErr.message });
+            return;
+        }
+        console.error('[analytics.controller summary]', err);
+        res.status(500).json({ error: 'Failed to generate analytics summary' });
     }
 }

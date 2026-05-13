@@ -22,11 +22,11 @@ import {
   fetchLockStatus, fetchComments, addComment, editComment, deleteComment,
   fetchVersions, restoreVersion, fetchFilePreviewBlob, lockFile,
   unlockFile, forceUnlockFile, fetchFileSummary,
-} from '@/api/files'
-import { fetchFileShares, revokeShareLink } from '@/api/shares'
-import type { CloudFile, Comment, FileVersion, LockStatus, TeamRole } from '@/types'
-import type { SharedLink } from '@/api/shares'
-import type { PreviewResult } from '@/api/files'
+} from '../api/files'
+import { fetchFileShares, revokeShareLink } from '../api/shares'
+import type { CloudFile, Comment, FileVersion, LockStatus, TeamRole } from '../types'
+import type { SharedLink } from '../api/shares'
+import type { PreviewResult } from '../api/files'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -787,8 +787,8 @@ function CommentCard({
 
   const editMutation = useMutation({
     mutationFn: (content: string) => editComment(teamId, comment.id, content),
-    onSuccess: () => { 
-      setIsEditing(false); 
+    onSuccess: () => {
+      setIsEditing(false);
       onMutated();
       toast.success('Comment updated');
     },

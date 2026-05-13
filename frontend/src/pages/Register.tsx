@@ -12,9 +12,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import api from '@/api/axios'
+import api from '../api/axios'
 
-// ─── 1. ZOD SCHEMA ─────────────────────────────────────────────────────────
+// ─── 1. ZOD SCHEMA                 ─────────────────────────────────────────────────────────
 //
 // PURPOSE: Defines exactly what a valid registration form looks like.
 //          Zod checks this BEFORE the form submits — no backend call wasted

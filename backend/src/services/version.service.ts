@@ -147,6 +147,32 @@ export const listVersions = async (
 // FIX: Uses logActivity utility (fire-and-forget, void) instead of raw
 //      tx.activityLog.create — consistent with every other log call.
 // =============================================================================
+/**
+ * Restore a past version of a file.
+ *
+ * IMPROVEMENTS FROM ORIGINAL:
+ *
+ * 1. Removed the storage_path equality guard.
+ *    WHY IT WAS WRONG: Deduplication gives identical-content uploads the SAME
+ *    storage_path. The guard fired for every deduplicated file, making restore
+ *    impossible even when the user legitimately wanted to go back.
+ *    The UI already prevents restoring the current version (idx=0 has no button).
+ *    No server-side guard is needed — the request is always intentional.
+ *
+ * 2. Added yjs_state = null to the restore update.
+ *    WHY: The collaborative editor checks yjs_state FIRST (PATH A in openEditorHandler).
+ *    If yjs_state is not null, the editor loads the Yjs CRDT and completely ignores
+ *    the storage_path we just restored. Clearing it forces PATH B: re-read from disk.
+ *    Without this, restore appears to do nothing — the editor still shows old content.
+ *
+ * 3. Added hash = null to the restore update.
+ *    WHY: The FileVersion table does not store content hashes. After restoring,
+ *    file.hash still points to the PREVIOUS version's content fingerprint.
+ *    If the user later uploads the same file that was restored, deduplication
+ *    compares against the wrong hash and makes wrong decisions.
+ *    null is honest — it tells dedup "hash unknown, treat as new" which is correct.
+ *    The hash will be recalculated correctly on the next upload of this file.
+ */
 export const restoreVersion = async (
     fileId: number,
     versionNumber: number,
@@ -155,99 +181,73 @@ export const restoreVersion = async (
     ip: string,
     userAgent: string
 ) => {
+    // Only editors and admins can restore versions
     await assertTeamMember(userId, teamId, 'editor');
 
+    // Verify the file exists in this team and is not deleted
     const file = await prisma.file.findFirst({
-        where: { id: fileId, team_id: teamId, is_deleted: false },
+        where: { id: fileId, team_id: teamId, is_deleted: false }
     });
     if (!file) throw new AppError('File not found', 404);
 
+    // Verify the target version row exists
     const targetVersion = await prisma.fileVersion.findFirst({
-        where: { file_id: fileId, version_number: versionNumber },
+        where: { file_id: fileId, version_number: versionNumber }
     });
     if (!targetVersion) throw new AppError(`Version ${versionNumber} not found`, 404);
 
-    // ── GUARD 1: Same storage path ──────────────────────────────────────────
-    // Prevents restoring to what is already the active content
-    if (file.storage_path === targetVersion.storage_path) {
-        throw new AppError(
-            `File already shows version ${versionNumber} content. No restore needed.`,
-            400
-        );
-    }
+    // Atomic transaction: snapshot current → restore old → log
+    const updatedFile = await prisma.$transaction(async (tx) => {
 
-    // ── GUARD 2: Same hash (content-based check) ─────────────────────────────
-    // WHY: storage_path check can fail if file was re-uploaded with same content
-    // but different path. Hash comparison catches true content equality.
-    // Only run if both hashes exist (hash was added in Week 5)
-    if (file.hash && targetVersion.file_size === file.file_size) {
-        // If sizes match, do a deeper check — look for a version with this
-        // exact storage_path already in the history to detect circular restores
-        const alreadyInHistory = await prisma.fileVersion.findFirst({
-            where: {
-                file_id: fileId,
-                storage_path: targetVersion.storage_path,
-                // Exclude the target version itself — we want OTHER versions with same path
-                NOT: { version_number: versionNumber },
-                // Only check recent versions — if last 2 versions alternate same paths,
-                // that's a circular restore pattern
-                version_number: { gt: versionNumber },
-            },
-            orderBy: { version_number: 'desc' },
-        });
-
-        // If the most recent version already has this content, we're in a loop
-        if (alreadyInHistory) {
-            const latestVersion = await prisma.fileVersion.findFirst({
-                where: { file_id: fileId },
-                orderBy: { version_number: 'desc' },
-            });
-
-            if (latestVersion?.storage_path === targetVersion.storage_path) {
-                throw new AppError(
-                    `Cannot restore: the previous version already has this content. ` +
-                    `This would create a duplicate version with no changes.`,
-                    400
-                );
-            }
-        }
-    }
-
-    // Atomic: snapshot current state, then apply historical state
-    const restoredFile = await prisma.$transaction(async tx => {
+        // Step 1: Snapshot the CURRENT file state into version history BEFORE overwriting.
+        // WHY: After restore, the user may want to undo the restore itself.
+        // createVersion reads file data inside the transaction — atomic and consistent.
         await createVersion(fileId, tx);
 
-        return tx.file.update({
+        // Step 2: Roll the main file record back to the requested historical state.
+        const restoredFile = await tx.file.update({
             where: { id: fileId },
             data: {
                 storage_path: targetVersion.storage_path,
                 file_size: targetVersion.file_size,
-                uploaded_by: userId,
-                // WHY clear yjs_state on restore:
-                //   After restoring, the canonical content is the disk file again.
-                //   If yjs_state is not cleared, the preview and collaborative editor
-                //   would still show the OLD collaborative content instead of the
-                //   restored version. Clearing it forces the editor to re-import
-                //   from the disk file on next open.
+
+                // WHY null: collaborative editor prioritises yjs_state over disk file.
+                // Without clearing this, the editor ignores the restored storage_path
+                // and the user sees no change despite the DB being correctly updated.
                 yjs_state: null,
+
+                // WHY null: clears the stale "last synced" timestamp.
+                // Leaving a stale timestamp is misleading in the UI.
                 yjs_last_saved: null,
-            },
+
+                // WHY null: FileVersion does not store content hashes.
+                // The current hash reflects the PREVIOUS version's content.
+                // Setting null is honest — dedup will treat the next upload
+                // of this file as new content and recalculate the hash correctly.
+                hash: null,
+
+                // The person performing the restore becomes the "last uploader"
+                // shown in the version history UI and activity feed.
+                uploaded_by: userId,
+            }
         });
+
+        // Step 3: Log to activity feed so the team can see what happened
+        await tx.activityLog.create({
+            data: {
+                team_id: teamId,
+                user_id: userId,
+                action: 'version_restored',
+                target_type: 'file',
+                target_id: fileId,
+                metadata: { restored_to_version: versionNumber },
+                ip,
+                userAgent
+            }
+        });
+
+        return restoredFile;
     });
 
-    void logActivity({
-        teamId,
-        userId,
-        action: 'version_restored',
-        targetType: 'file',
-        targetId: fileId,
-        metadata: {
-            file_name: file.original_name,
-            restored_to_version: versionNumber,
-        },
-        ip,
-        userAgent,
-    });
-
-    return restoredFile;
+    return updatedFile;
 };

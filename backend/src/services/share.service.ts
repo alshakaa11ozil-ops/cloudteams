@@ -8,6 +8,7 @@ import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityTargetType } from '../utils/activityLogger';
 import { emitToTeam } from '../socket';
 import { SOCKET_EVENTS } from '../config/socketEvents';
+import { extractHtmlFromYjsState } from './file.service';
 
 // ---------------------------------------------------------------------------
 // TYPES & INTERFACES
@@ -15,6 +16,7 @@ import { SOCKET_EVENTS } from '../config/socketEvents';
 export interface CreateShareOptions {
     fileId?: number;          // Optional: If provided, shares ONE file.
     folderId?: number;        // Optional: If provided, shares ONE folder. If both omitted, shares ENTIRE TEAM.
+    documentId?: number;      // Optional: If provided, shares ONE document.
     password?: string;        // Optional: Bcrypt hashed for security
     expiresInHours?: number;  // Optional: Used to calculate expiration datetime
     downloadLimit?: number;   // Optional: Maximum times the link can be used
@@ -62,8 +64,17 @@ export async function createSharedLink(
         if (folder.is_deleted) throw new AppError('Cannot share a deleted folder', 400);
     }
 
-    if (options.fileId && options.folderId) {
-        throw new AppError('Cannot share both a file and a folder in the same link', 400);
+    // 2c. Validate document context if documentId is provided
+    if (options.documentId) {
+        const document = await prisma.documents.findFirst({
+            where: { id: options.documentId, team_id: teamId }
+        });
+        if (!document) throw new AppError('Document not found in this team', 404);
+        if (document.is_deleted) throw new AppError('Cannot share a deleted document', 400);
+    }
+
+    if ((options.fileId ? 1 : 0) + (options.folderId ? 1 : 0) + (options.documentId ? 1 : 0) > 1) {
+        throw new AppError('Cannot share multiple resource types in the same link', 400);
     }
 
     // 3. Generate a 32-character base64-url string via NodeJS built-in crypto.
@@ -95,6 +106,7 @@ export async function createSharedLink(
             team_id: teamId,
             file_id: options.fileId ?? null,
             folder_id: options.folderId ?? null,
+            document_id: options.documentId ?? null,
             created_by: userId,
             token,
             password_hash,
@@ -109,6 +121,7 @@ export async function createSharedLink(
     let targetId = teamId;
     if (options.fileId) { targetType = 'file'; targetId = options.fileId; }
     else if (options.folderId) { targetType = 'folder'; targetId = options.folderId; }
+    else if (options.documentId) { targetType = 'document' as any; targetId = options.documentId; }
 
     void logActivity({
         teamId,
@@ -143,7 +156,7 @@ export async function createSharedLink(
 export async function getLinkMetadata(token: string) {
     const link = await prisma.sharedLink.findUnique({
         where: { token },
-        include: { file: true, folder: true, team: true }
+        include: { files: true, folders: true, teams: true, documents: true }
     });
 
     if (!link) throw new AppError('Link not found', 404);
@@ -159,25 +172,34 @@ export async function getLinkMetadata(token: string) {
     }
 
     // Differentiate between File Share, Folder Share, and Team Share
-    if (link.file_id && link.file) {
+    if (link.file_id && link.files) {
         // Handle Edge Case: Deleted while link was still active
-        if (link.file.is_deleted) throw new AppError('The shared file has been deleted by its owner', 404);
+        if (link.files.is_deleted) throw new AppError('The shared file has been deleted by its owner', 404);
 
         return {
             type: 'file',
             id: link.id,
-            filename: link.file.original_name,
-            fileSize: link.file.file_size,
-            mimeType: link.file.mime_type,
+            filename: link.files.original_name,
+            fileSize: link.files.file_size,
+            mimeType: link.files.mime_type,
             requiresPassword: !!link.password_hash
         };
-    } else if (link.folder_id && link.folder) {
-        if (link.folder.is_deleted) throw new AppError('The shared folder has been deleted by its owner', 404);
+    } else if (link.folder_id && link.folders) {
+        if (link.folders.is_deleted) throw new AppError('The shared folder has been deleted by its owner', 404);
 
         return {
             type: 'folder',
             id: link.id,
-            folderName: link.folder.name,
+            folderName: link.folders.name,
+            requiresPassword: !!link.password_hash
+        };
+    } else if (link.document_id && link.documents) {
+        if (link.documents.is_deleted) throw new AppError('The shared document has been deleted by its owner', 404);
+
+        return {
+            type: 'document',
+            id: link.id,
+            title: link.documents.title,
             requiresPassword: !!link.password_hash
         };
     } else {
@@ -185,7 +207,7 @@ export async function getLinkMetadata(token: string) {
         return {
             type: 'team',
             id: link.id,
-            teamName: link.team.name,
+            teamName: link.teams.name,
             requiresPassword: !!link.password_hash
         };
     }
@@ -205,7 +227,7 @@ export async function getTeamContent(token: string, password?: string, currentFo
         where: { token }
     });
 
-    if (!link || link.file_id) {
+    if (!link || link.file_id || link.document_id) {
         throw new AppError('Invalid token or not a team/folder share', 404);
     }
 
@@ -260,7 +282,7 @@ export async function getTeamContent(token: string, password?: string, currentFo
             where: { team_id: link.team_id, is_deleted: false, folder_id: parentFilter },
             orderBy: { original_name: 'asc' }
         }),
-        prisma.document.findMany({
+        prisma.documents.findMany({
             where: { team_id: link.team_id, is_deleted: false, folder_id: parentFilter },
             select: { id: true, title: true, created_at: true, updated_at: true, folder_id: true },
             orderBy: { title: 'asc' }
@@ -284,7 +306,7 @@ export async function getTeamContent(token: string, password?: string, currentFo
 export async function downloadSharedFile(token: string, password?: string, requestedFileId?: number) {
     const link = await prisma.sharedLink.findUnique({
         where: { token },
-        include: { file: true }
+        include: { files: true }
     });
 
     if (!link) throw new AppError('Link not found', 404);
@@ -301,8 +323,8 @@ export async function downloadSharedFile(token: string, password?: string, reque
 
     // File resolution runs before the limit check passes so we don't burn tokens on failures
     let targetFile;
-    if (link.file_id && link.file) {
-        targetFile = link.file;
+    if (link.file_id && link.files) {
+        targetFile = link.files;
     } else if (requestedFileId) {
         targetFile = await prisma.file.findFirst({
             where: { id: requestedFileId, team_id: link.team_id }
@@ -389,8 +411,8 @@ export async function revokeSharedLink(token: string, userId: number) {
         teamId: link.team_id,
         userId: userId,
         action: 'link_revoked',
-        targetType: link.file_id ? 'file' : 'team',
-        targetId: link.file_id ?? link.team_id,
+        targetType: link.file_id ? 'file' : (link.folder_id ? 'folder' : (link.document_id ? 'document' as any : 'team')),
+        targetId: link.file_id ?? link.folder_id ?? link.document_id ?? link.team_id,
         metadata: { linkId: link.id }
     });
 
@@ -420,3 +442,140 @@ export async function listFileSharedLinks(userId: number, teamId: number, fileId
     return links;
 }
 
+// ===========================================================================
+// SERVICE FUNCTION 7: listDocumentSharedLinks
+// ===========================================================================
+// PURPOSE: List all active share links for a specific document.
+// ===========================================================================
+export async function listDocumentSharedLinks(userId: number, teamId: number, documentId: number) {
+    await assertTeamMember(userId, teamId, 'viewer');
+
+    const links = await prisma.sharedLink.findMany({
+        where: { document_id: documentId, team_id: teamId },
+        orderBy: { created_at: 'desc' }
+    });
+
+    return links;
+}
+
+// ===========================================================================
+// SERVICE FUNCTION 8: getSharedDocumentContent
+// ===========================================================================
+// PURPOSE: Return read-only HTML for a shared document link
+// ===========================================================================
+export async function getSharedDocumentContent(token: string, password?: string, requestedDocumentId?: number) {
+    const link = await prisma.sharedLink.findUnique({
+        where: { token },
+        include: { documents: true }
+    });
+
+    if (!link) throw new AppError('Link not found', 404);
+
+    if (link.expiration_date && link.expiration_date < new Date()) {
+        throw new AppError('Link has expired', 410);
+    }
+
+    if (link.password_hash) {
+        if (!password) throw new AppError('Password required', 401);
+        const isValid = await bcrypt.compare(password, link.password_hash);
+        if (!isValid) throw new AppError('Invalid password', 401);
+    }
+
+    let targetDoc;
+    if (link.document_id && link.documents) {
+        targetDoc = link.documents;
+    } else if (requestedDocumentId) {
+        targetDoc = await prisma.documents.findFirst({
+            where: { id: requestedDocumentId, team_id: link.team_id }
+        });
+        if (!targetDoc) throw new AppError('Document not found in this team', 404);
+
+        if (link.folder_id) {
+            let currentFolderId = targetDoc.folder_id;
+            let isDescendant = false;
+
+            while (currentFolderId) {
+                if (currentFolderId === link.folder_id) {
+                    isDescendant = true;
+                    break;
+                }
+                const folder = await prisma.folder.findUnique({
+                    where: { id: currentFolderId }
+                });
+                if (!folder) break;
+                currentFolderId = folder.parent_folder_id;
+            }
+
+            if (!isDescendant) {
+                throw new AppError('Document not found in this shared folder', 404);
+            }
+        }
+    } else {
+        throw new AppError('Missing document selection for Team/Folder Share', 400);
+    }
+
+    if (targetDoc.is_deleted) {
+        throw new AppError('The shared document has been deleted by its owner', 404);
+    }
+
+    // Atomic increment
+    const rowsUpdated = await prisma.$executeRaw`
+        UPDATE shared_links
+        SET downloads_count = downloads_count + 1
+        WHERE id = ${link.id}
+          AND (download_limit IS NULL OR downloads_count < download_limit)
+    `;
+
+    if (rowsUpdated === 0) {
+        throw new AppError('View limit reached', 410);
+    }
+
+    const yjsState = targetDoc.yjs_state as Buffer | null;
+    let html = '<p><em>This document is empty.</em></p>';
+    
+    if (yjsState && yjsState.length >= 20) {
+        html = extractHtmlFromYjsState(yjsState);
+    }
+
+    return {
+        html,
+        title: targetDoc.title
+    };
+}
+
+// ===========================================================================
+// SERVICE FUNCTION: revokeSharedLinkAdmin
+// ===========================================================================
+// PURPOSE: Delete a share link with role-aware access control.
+//   - Editors can delete their OWN links (created_by === userId)
+//   - Admins can delete ANY link belonging to their team
+// ===========================================================================
+export async function revokeSharedLinkAdmin(token: string, userId: number, teamId: number) {
+    const link = await prisma.sharedLink.findUnique({ where: { token } });
+    if (!link) throw new AppError('Link not found', 404);
+
+    // Ensure the link belongs to this team (prevents cross-team manipulation)
+    if (link.team_id !== teamId) throw new AppError('Link not found', 404);
+
+    const membership = await assertTeamMember(userId, teamId, 'viewer');
+
+    const isAdmin = membership.role === 'admin';
+    const isOwner = link.created_by === userId;
+
+    if (!isAdmin && !isOwner) {
+        throw new AppError('You can only delete share links you created', 403);
+    }
+
+    await prisma.sharedLink.delete({ where: { id: link.id } });
+
+    void logActivity({
+        teamId: link.team_id,
+        userId,
+        action: 'link_revoked',
+        targetType: link.document_id ? 'document' as any : (link.file_id ? 'file' : 'team'),
+        targetId: link.document_id ?? link.file_id ?? link.team_id,
+        metadata: { linkId: link.id, token }
+    });
+
+    emitToTeam(link.team_id, SOCKET_EVENTS.LINK_REVOKED, { linkId: link.id, revokedBy: userId });
+}

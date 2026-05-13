@@ -9,7 +9,7 @@
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { createFolder } from '@/api/files'
+import { createFolder } from '../api/files'
 import toast from 'react-hot-toast'
 
 interface CreateFolderModalProps {

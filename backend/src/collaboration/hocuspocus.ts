@@ -1,29 +1,27 @@
 // =============================================================================
 // src/collaboration/hocuspocus.ts — @hocuspocus/server v4.0.0
 //
-// CONFIRMED FROM PRISMA STUDIO:
-//   - yjs_state column EXISTS (bytea type) ✅
-//   - yjs_state is NULL on ALL rows → store() never successfully saved ❌
-//   - last_saved is NULL on ALL rows → confirms store() never ran ❌
+// CONFIRMED:
+//   - Hocuspocus class HAS handleConnection() ✅
+//   - Server class does NOT — we use bare Hocuspocus ✅
+//   - yjs_state column EXISTS in Document + File tables ✅
 //
-// ROOT CAUSE:
-//   React Strict Mode creates TWO WebSocket connections:
-//     Connection 1 (Strict Mode): authenticates → immediately disconnects
-//     Connection 2 (real):        authenticates → user types → should save
+// HOW SINGLE-PORT WORKS:
+//   server.ts creates a ws.Server({ noServer: true })
+//   httpServer.on('upgrade') routes /collaboration to wss.handleUpgrade()
+//   wss.handleUpgrade callback calls collabServer.handleConnection(ws, request)
+//   Hocuspocus owns the ws from that point — do NOT add ws.on('message') after
 //
-//   When Connection 1 disconnects with an EMPTY Y.Doc, Hocuspocus calls
-//   store() with an empty/tiny state. This empty state gets written to DB
-//   OR store() fails because Y.encodeStateAsUpdate on empty doc produces
-//   a state that's technically valid but tiny (< 10 bytes header only).
+// SAVE FLOW:
+//   User types → Yjs CRDT update → onChange (rate limit + size check)
+//   → debounce 5000ms → store() → Prisma updateMany → PostgreSQL yjs_state
+//   On last disconnect: immediate store() (no debounce)
 //
-//   Then Connection 2 connects, user types, debounce fires at 5000ms,
-//   but the store() call is failing for a different reason.
-//
-// FIXES APPLIED:
-//   1. Skip store() when state is empty (< 20 bytes = Yjs header only, no content)
-//   2. Add comprehensive logging to find exact failure point
-//   3. Guard store() with explicit existence check before update
-//   4. Use upsert instead of update to avoid "record not found" errors
+// KEY FIXES:
+//   1. hasRealContent() guard — skips empty Yjs states from Strict Mode cleanup
+//   2. updateMany not update — returns { count: 0 } instead of throwing P2025
+//   3. Synchronous destroy in cleanup (no rAF) — prevents room-kill race
+//   4. compactYjsState — strips CRDT history before save (3-10x smaller)
 // =============================================================================
 
 import { Hocuspocus } from '@hocuspocus/server'
@@ -32,60 +30,66 @@ import * as Y from 'yjs'
 import prisma from '../config/database'
 import { verifyToken } from '../utils/jwt'
 import { assertTeamMember } from '../utils/teamGuard'
-import { createCollaborativeVersionCheckpoint } from '../services/version.service'
 
 // ---------------------------------------------------------------------------
 // HELPER: parseDocumentName
 // ---------------------------------------------------------------------------
+// Validates and extracts type + ID from documentName.
+// "doc-42"  → { type: "doc",  id: 42 }
+// "file-17" → { type: "file", id: 17 }
+// Anything else → throws → connection rejected
+// ---------------------------------------------------------------------------
 function parseDocumentName(name: string): { type: 'doc' | 'file'; id: number } {
     const match = name.match(/^(doc|file)-(\d+)$/)
-    if (!match) throw new Error(`Invalid document name: "${name}". Expected "doc-{id}" or "file-{id}".`)
+    if (!match) {
+        throw new Error(`Invalid document name: "${name}". Expected "doc-{id}" or "file-{id}".`)
+    }
     return { type: match[1] as 'doc' | 'file', id: parseInt(match[2], 10) }
 }
 
 // ---------------------------------------------------------------------------
 // HELPER: compactYjsState
 // ---------------------------------------------------------------------------
+// Strips accumulated CRDT edit history before saving.
+// Without this: a doc where 5000 words typed then deleted stores all ops forever.
+// With this: only current visible content is stored. Saves 3-10x space.
+// ---------------------------------------------------------------------------
 function compactYjsState(state: Uint8Array): Uint8Array {
     const doc = new Y.Doc()
     Y.applyUpdate(doc, state)
     const compacted = Y.encodeStateAsUpdate(doc)
-    doc.destroy()
+    doc.destroy() // CRITICAL: frees internal CRDT memory allocations
     return compacted
 }
 
 // ---------------------------------------------------------------------------
 // HELPER: hasRealContent
 // ---------------------------------------------------------------------------
-// A Yjs state with ONLY the header (no actual document nodes) is < 20 bytes.
-// We skip saving these empty states to avoid overwriting real content.
+// A Yjs state with ONLY the header (no document nodes) is < 20 bytes.
+// Any real content (even one character) pushes this above 20 bytes.
 //
 // WHY THIS MATTERS:
 //   React Strict Mode's first connection disconnects immediately with an
-//   empty Y.Doc. Without this guard, store() would save an empty state
-//   over any real content that was previously saved.
+//   empty Y.Doc. Hocuspocus calls store() with that empty state (6-10 bytes).
+//   Without this guard, the empty state would overwrite real saved content.
 // ---------------------------------------------------------------------------
 function hasRealContent(state: Uint8Array): boolean {
-    // A freshly initialised Y.Doc with no content encodes to ~6-10 bytes.
-    // Any real content (even one character) pushes this above 20 bytes.
     return state.length > 20
 }
 
 // ---------------------------------------------------------------------------
-// Rate limiting
+// Rate limiting: "userId:documentName" → { count, windowStart, lastSizeCheck }
+// Per-user per-document — two tabs on different docs don't share limits
 // ---------------------------------------------------------------------------
-const updateCounts = new Map<string, { count: number; windowStart: number; lastSizeCheck: number }>()
-const MAX_DOCUMENT_SIZE = 5 * 1024 * 1024
+const updateCounts = new Map<string, {
+    count: number
+    windowStart: number
+    lastSizeCheck: number
+}>()
 
-// ---------------------------------------------------------------------------
-// Collaborative version checkpoint debounce
-// ---------------------------------------------------------------------------
-// Tracks the last time a version was created for each file during collab editing.
-// We create at most one version per 10 minutes per file to avoid flooding the
-// version history with thousands of micro-checkpoints.
-const versionCheckpointMap = new Map<number, number>() // fileId → last checkpoint timestamp
-const VERSION_CHECKPOINT_INTERVAL_MS = 10 * 60 * 1000  // 10 minutes
+const MAX_DOCUMENT_SIZE = 5 * 1024 * 1024  // 5MB
 
+// Clean up stale entries every 5 minutes (prevents memory leak)
 setInterval(() => {
     const now = Date.now()
     for (const [key, record] of updateCounts.entries()) {
@@ -94,15 +98,28 @@ setInterval(() => {
 }, 5 * 60 * 1000)
 
 // =============================================================================
-// HOCUSPOCUS INSTANCE
+// HOCUSPOCUS INSTANCE — bare Hocuspocus class (NOT Server wrapper)
+// Server wrapper's crossws adapter silently fails with external ws.Server
 // =============================================================================
 const collabServer = new Hocuspocus({
+    // store() fires at most once every 5s during active editing
+    // On last client disconnect: fires immediately (no debounce)
     debounce: 5000,
 
     // ── onAuthenticate ──────────────────────────────────────────────────────
+    // Runs BEFORE any document data is sent. Throwing here rejects with 403.
+    // TOKEN: sent by HocuspocusProvider in WS payload, not HTTP headers.
+    //   WHY: WebSockets can't send Authorization headers post-handshake.
+    //   WHY NOT query params: Exposed in server logs and browser history.
+    // ────────────────────────────────────────────────────────────────────────
     async onAuthenticate(data) {
-        console.log(`\n[Hocuspocus] ─── onAuthenticate for "${data.documentName}" ───`)
+        console.log(`\n[Hocuspocus] ─── onAuthenticate START: "${data.documentName}" ───`)
         const { token, documentName } = data
+
+        if (!token) {
+            console.error(`[Hocuspocus] ❌ NO TOKEN PROVIDED for "${documentName}"`)
+            throw new Error('Authentication token is required')
+        }
 
         // Step 1: Verify JWT
         let payload: { userId: number; email: string }
@@ -110,41 +127,49 @@ const collabServer = new Hocuspocus({
             payload = verifyToken(token) as { userId: number; email: string }
             console.log(`[Hocuspocus] ✅ JWT OK — userId: ${payload.userId}`)
         } catch (e: any) {
-            console.error(`[Hocuspocus] ❌ JWT FAILED:`, e.message)
+            console.error(`[Hocuspocus] ❌ JWT VERIFICATION FAILED:`, e.message)
             throw new Error('Invalid or expired JWT token')
         }
 
-        // Step 2: Parse document name
+        // Step 2: Parse and validate documentName format
         const { type, id } = parseDocumentName(documentName)
-        console.log(`[Hocuspocus] ✅ Parsed: type=${type}, id=${id}`)
+        console.log(`[Hocuspocus] ✅ Parsed documentName: type=${type}, id=${id}`)
 
-        // Step 3: Verify resource exists in DB
+        // Step 3: Verify resource exists in DB and is not deleted
         let teamId: number
+        let isLockedForUser = false
+
         if (type === 'doc') {
-            const doc = await prisma.document.findFirst({
+            const doc = await prisma.documents.findFirst({
                 where: { id, is_deleted: false },
-                select: { team_id: true }
+                select: { team_id: true, lockOwnerUserId: true, lockExpiresAt: true }
             })
             if (!doc) {
-                console.error(`[Hocuspocus] ❌ Document ${id} NOT FOUND`)
+                console.error(`[Hocuspocus] ❌ Document ${id} not found`)
                 throw new Error(`Document ${id} not found or deleted`)
             }
             teamId = doc.team_id
-            console.log(`[Hocuspocus] ✅ Document ${id} found in team ${teamId}`)
+            if (doc.lockExpiresAt && doc.lockExpiresAt > new Date() && doc.lockOwnerUserId !== payload.userId) {
+                isLockedForUser = true
+            }
+            console.log(`[Hocuspocus] ✅ Document ${id} found in team ${teamId} (Locked: ${isLockedForUser})`)
         } else {
             const file = await prisma.file.findFirst({
                 where: { id, is_deleted: false },
-                select: { team_id: true }
+                select: { team_id: true, lockOwnerUserId: true, lockExpiresAt: true }
             })
             if (!file) {
-                console.error(`[Hocuspocus] ❌ File ${id} NOT FOUND`)
+                console.error(`[Hocuspocus] ❌ File ${id} not found`)
                 throw new Error(`File ${id} not found or deleted`)
             }
             teamId = file.team_id
-            console.log(`[Hocuspocus] ✅ File ${id} found in team ${teamId}`)
+            if (file.lockExpiresAt && file.lockExpiresAt > new Date() && file.lockOwnerUserId !== payload.userId) {
+                isLockedForUser = true
+            }
+            console.log(`[Ho cuspocus] ✅ File ${id} found in team ${teamId} (Locked: ${isLockedForUser})`)
         }
 
-        // Step 4: Team membership
+        // Step 4: Verify team membership
         try {
             await assertTeamMember(payload.userId, teamId)
             console.log(`[Hocuspocus] ✅ Team membership confirmed`)
@@ -153,8 +178,14 @@ const collabServer = new Hocuspocus({
             throw e
         }
 
+        if (isLockedForUser) {
+            (data as any).connection.readOnly = true
+            console.log(`[Hocuspocus] 🔒 Connection set to readOnly for user ${payload.userId}`)
+        }
+
         console.log(`[Hocuspocus] ✅ Auth SUCCESS for "${documentName}"\n`)
 
+        // Return context — available in store/onChange/onDisconnect as data.context
         return {
             userId: payload.userId,
             teamId,
@@ -164,6 +195,10 @@ const collabServer = new Hocuspocus({
     },
 
     // ── onChange ─────────────────────────────────────────────────────────────
+    // Fires on every document update (every keystroke).
+    // Rate limit: 100 updates/10s per user per document.
+    // Size cap: checked every 30s (Y.encodeStateAsUpdate is O(n) — expensive).
+    // ─────────────────────────────────────────────────────────────────────────
     async onChange(data) {
         const key = data.context?.userId
             ? `${data.context.userId}:${data.documentName}`
@@ -172,17 +207,19 @@ const collabServer = new Hocuspocus({
 
         const now = Date.now()
         let record = updateCounts.get(key)
+
         if (!record || now - record.windowStart > 10_000) {
             record = { count: 0, windowStart: now, lastSizeCheck: 0 }
             updateCounts.set(key, record)
         }
         record.count++
 
+        // Size check every 30s only — Y.encodeStateAsUpdate is O(n) in doc size
         if (now - record.lastSizeCheck > 30_000) {
             const stateLength = Y.encodeStateAsUpdate(data.document).length
             record.lastSizeCheck = now
             if (stateLength > MAX_DOCUMENT_SIZE) {
-                console.error(`[Hocuspocus] ❌ Size cap exceeded: ${data.documentName}`)
+                console.error(`[Hocuspocus] ❌ Size cap exceeded: ${data.documentName} (${stateLength} bytes)`)
                 throw new Error('Document too large (max 5MB)')
             }
         }
@@ -195,6 +232,7 @@ const collabServer = new Hocuspocus({
 
     // ── onDisconnect ─────────────────────────────────────────────────────────
     async onDisconnect(data) {
+        // Clean up rate limiter entry for this user+document
         const key = data.context?.userId
             ? `${data.context.userId}:${data.documentName}`
             : null
@@ -202,21 +240,24 @@ const collabServer = new Hocuspocus({
 
         console.log(
             `[Hocuspocus] 🔌 Disconnected — User ${data.context?.userId ?? '?'} ` +
-            `from "${data.documentName}" | Active connections: ${collabServer.getConnectionsCount()}`
+            `from "${data.documentName}" | Active: ${collabServer.getConnectionsCount()}`
         )
     },
 
     extensions: [
         new Database({
             // ── fetch() ───────────────────────────────────────────────────────
-            // Called when FIRST client connects to a document room.
+            // Called when the FIRST client connects to a document room.
+            // Returns null → Hocuspocus creates a fresh empty Y.Doc.
+            // Returns Uint8Array → Hocuspocus applies saved state to the Y.Doc.
+            // ─────────────────────────────────────────────────────────────────
             async fetch({ documentName }) {
                 console.log(`[Hocuspocus] 📖 fetch() for "${documentName}"`)
                 const { type, id } = parseDocumentName(documentName)
 
                 try {
                     if (type === 'doc') {
-                        const doc = await prisma.document.findUnique({
+                        const doc = await prisma.documents.findUnique({
                             where: { id },
                             select: { yjs_state: true }
                         })
@@ -226,6 +267,8 @@ const collabServer = new Hocuspocus({
                             return null
                         }
                         console.log(`[Hocuspocus] 📖 fetch() → ${state.length} bytes`)
+                        // Prisma Bytes → Buffer (Node.js) → Uint8Array (Yjs)
+                        // Buffer is a subclass of Uint8Array — this cast is safe
                         return new Uint8Array(state)
                     } else {
                         const file = await prisma.file.findUnique({
@@ -242,49 +285,83 @@ const collabServer = new Hocuspocus({
                     }
                 } catch (err: any) {
                     console.error(`[Hocuspocus] ❌ fetch() ERROR:`, err.message)
-                    return null
+                    return null // Return null on error — user starts fresh rather than crashing
                 }
             },
 
             // ── store() ───────────────────────────────────────────────────────
             // Called every ~5s during editing AND on last client disconnect.
             //
-            // CRITICAL GUARD: Skip empty states.
-            // When React Strict Mode's first connection disconnects immediately,
-            // Hocuspocus calls store() with an empty Y.Doc state (< 20 bytes).
-            // Without this guard, that empty state would overwrite real content.
+            // GUARD: hasRealContent() — skips empty states.
+            //   React Strict Mode's first connection disconnects immediately
+            //   with an empty Y.Doc (~6-10 bytes). Without this guard, that
+            //   empty state would overwrite any previously saved real content.
+            //
+            // updateMany not update:
+            //   update() throws P2025 "Record not found" if document was deleted
+            //   while the editor was open. updateMany() returns { count: 0 }
+            //   gracefully — no crash, no data loss.
+            // ─────────────────────────────────────────────────────────────────
             async store({ documentName, state }) {
-                console.log(`\n[Hocuspocus] 💾 store() called for "${documentName}" | ${state.length} bytes`)
+                console.log(`\n[Hocuspocus] 💾 store() for "${documentName}" | ${state.length} bytes`)
 
-                // GUARD: Skip empty states from Strict Mode cleanup connections
+                // GUARD: skip empty Yjs states (Strict Mode cleanup connections)
                 if (!hasRealContent(state)) {
-                    console.log(`[Hocuspocus] ⏭️  store() SKIPPED — empty state (${state.length} bytes < 20 byte threshold)`)
+                    console.log(
+                        `[Hocuspocus] ⏭️  store() SKIPPED — ` +
+                        `empty state (${state.length} bytes, threshold is 20)`
+                    )
                     return
                 }
 
                 const { type, id } = parseDocumentName(documentName)
-                const compacted = compactYjsState(state)
-                const buffer = Buffer.from(compacted)
-                const pct = Math.round((1 - compacted.length / state.length) * 100)
 
+                // Compact: strip CRDT history, keep only current content
+                const compacted = compactYjsState(state)
+                const pct = Math.round((1 - compacted.length / state.length) * 100)
                 console.log(`[Hocuspocus] 💾 Compacted: ${state.length}B → ${compacted.length}B (${pct}% smaller)`)
+
+                // Prisma Bytes column requires Node.js Buffer (not raw Uint8Array)
+                const buffer = Buffer.from(compacted)
 
                 try {
                     if (type === 'doc') {
-                        // Use updateMany to avoid "record not found" error.
-                        // updateMany returns { count: 0 } if no rows match — never throws.
-                        const result = await prisma.document.updateMany({
+                        const result = await prisma.documents.updateMany({
                             where: { id, is_deleted: false },
                             data: {
                                 yjs_state: buffer,
                                 last_saved: new Date(),
                             }
                         })
-
                         if (result.count === 0) {
-                            console.error(`[Hocuspocus] ❌ store() doc ${id}: NO ROWS UPDATED (document may be deleted or wrong id)`)
+                            console.error(`[Hocuspocus] ❌ store() doc ${id}: 0 rows updated — document may be deleted`)
                         } else {
-                            console.log(`[Hocuspocus] ✅ store() saved doc ${id} (${result.count} row updated)`)
+                            console.log(`[Hocuspocus] ✅ store() saved doc ${id}\n`)
+
+                            // AUTO-SNAPSHOT: Create a version every 30 minutes
+                            const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000)
+                            const recentSnapshot = await prisma.documentVersion.findFirst({
+                                where: { document_id: id, created_at: { gt: thirtyMinsAgo } },
+                                select: { id: true }
+                            })
+
+                            if (!recentSnapshot) {
+                                const docInfo = await prisma.documents.findUnique({
+                                    where: { id },
+                                    select: { created_by: true }
+                                })
+                                if (docInfo) {
+                                    await prisma.documentVersion.create({
+                                        data: {
+                                            document_id: id,
+                                            created_by: docInfo.created_by,
+                                            version_name: 'Auto-save',
+                                            yjs_state: buffer,
+                                        }
+                                    })
+                                    console.log(`[Hocuspocus] ✅ store() created auto-snapshot for doc ${id}`)
+                                }
+                            }
                         }
                     } else {
                         const result = await prisma.file.updateMany({
@@ -294,23 +371,10 @@ const collabServer = new Hocuspocus({
                                 yjs_last_saved: new Date(),
                             }
                         })
-
                         if (result.count === 0) {
-                            console.error(`[Hocuspocus] ❌ store() file ${id}: NO ROWS UPDATED`)
+                            console.error(`[Hocuspocus] ❌ store() file ${id}: 0 rows updated`)
                         } else {
-                            console.log(`[Hocuspocus] ✅ store() saved file ${id} (${result.count} row updated)`)
-
-                            // ── Collaborative version checkpoint ───────────────────────
-                            // Create a version snapshot at most once per 10 minutes so
-                            // the Versions tab shows that the file was collaboratively edited.
-                            const lastCheckpoint = versionCheckpointMap.get(id) ?? 0
-                            if (Date.now() - lastCheckpoint > VERSION_CHECKPOINT_INTERVAL_MS) {
-                                versionCheckpointMap.set(id, Date.now())
-                                // Fire-and-forget — don't block the save response
-                                void createCollaborativeVersionCheckpoint(id).then(() => {
-                                    console.log(`[Hocuspocus] 📸 Version checkpoint created for file ${id}`)
-                                })
-                            }
+                            console.log(`[Hocuspocus] ✅ store() saved file ${id}\n`)
                         }
                     }
                 } catch (err: any) {
@@ -326,4 +390,4 @@ const collabServer = new Hocuspocus({
     ],
 })
 
-export default collabServer 
+export default collabServer

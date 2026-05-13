@@ -8,7 +8,7 @@
 //   works for every user instantly on registration.
 //   Professional tools like Notion and Linear use this by default.
 
-import { getAvatarColor, getInitials } from '@/utils/avatarColor'
+import { getAvatarColor, getInitials } from '../utils/avatarColor'
 
 interface UserAvatarProps {
     userId: number

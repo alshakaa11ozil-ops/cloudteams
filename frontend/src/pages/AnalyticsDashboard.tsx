@@ -4,9 +4,11 @@
 //   - "Active Members" → "Active Contributors"
 //   - fileCount field verified against AnalyticsResult type
 
+import { useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchAnalytics } from '@/api/files'
+import { fetchAnalytics, fetchAnalyticsSummary } from '../api/files'
+import { SparklesIcon } from '@heroicons/react/24/outline'
 import {
   PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   Legend, ResponsiveContainer, BarChart, Bar,
@@ -20,11 +22,30 @@ export default function AnalyticsDashboard() {
   const { id } = useParams<{ id: string }>()
   const teamId = parseInt(id || '0', 10)
 
+  const [timeRange, setTimeRange] = useState<'7d' | '30d' | 'all'>('30d')
+
+  const dateParams = useMemo(() => {
+    if (timeRange === 'all') return {}
+    const start = new Date()
+    start.setDate(start.getDate() - (timeRange === '7d' ? 7 : 30))
+    return {
+      startDate: start.toISOString(),
+      endDate: new Date().toISOString()
+    }
+  }, [timeRange])
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['analytics', teamId],
-    queryFn: () => fetchAnalytics(teamId),
+    queryKey: ['analytics', teamId, timeRange],
+    queryFn: () => fetchAnalytics(teamId, dateParams.startDate, dateParams.endDate),
     enabled: teamId > 0,
     staleTime: 60_000, // analytics don't need real-time — 1 minute cache
+  })
+
+  const { data: summary, isLoading: isLoadingSummary } = useQuery({
+    queryKey: ['analytics-summary', teamId, timeRange],
+    queryFn: () => fetchAnalyticsSummary(teamId, dateParams.startDate, dateParams.endDate),
+    enabled: teamId > 0 && !!data, // Wait for base data to load first, optional but good
+    staleTime: 5 * 60_000, // 5 minutes cache
   })
 
   if (isLoading) {
@@ -50,22 +71,82 @@ export default function AnalyticsDashboard() {
     value: ft.count || 0,
   }))
 
-  // FIX: filter out null days before calling format()
-  // A null day would cause format() to throw and crash the chart
-  const uploadData = (data.uploadsPerDay || [])
-    .filter(ud => ud && ud.day != null)
-    .map(ud => ({
-      date: format(new Date(ud.day), 'MMM d'),
-      uploads: ud.count || 0,
-    }))
+  // Helper to group activityByType for the stacked bar chart
+  const prepareActivityData = (raw: any[]) => {
+    const map: Record<string, any> = {}
+    raw.forEach(item => {
+      if (!map[item.day]) map[item.day] = { day: format(new Date(item.day), 'MMM d') }
+      map[item.day][item.action] = item.count
+    })
+    return Object.values(map).sort((a: any, b: any) => new Date(a.day).getTime() - new Date(b.day).getTime())
+  }
 
   return (
     <div className="flex flex-col h-full bg-slate-50 overflow-y-auto w-full custom-scrollbar">
       <div className="px-8 py-8 max-w-7xl mx-auto w-full space-y-8">
 
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Analytics Insights</h1>
-          <p className="text-sm text-slate-500 mt-1">Storage and activity overview for your team</p>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Analytics Insights</h1>
+            <p className="text-sm text-slate-500 mt-1">Storage and activity overview for your team</p>
+          </div>
+          <div className="mt-4 sm:mt-0 flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-500 font-medium">Time Range:</span>
+              <select
+                value={timeRange}
+                onChange={(e) => setTimeRange(e.target.value as '7d' | '30d' | 'all')}
+                className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+                <option value="all">All Time</option>
+              </select>
+            </div>
+            <button
+              onClick={() => {
+                if (!data) return
+                const csvContent = "data:text/csv;charset=utf-8,"
+                  + "Type,Name,Size/Count\n"
+                  + data.largestFiles.map(f => `File,${f.original_name},${f.file_size_formatted}`).join("\n")
+                const encodedUri = encodeURI(csvContent)
+                const link = document.createElement("a")
+                link.setAttribute("href", encodedUri)
+                link.setAttribute("download", `analytics_team_${teamId}.csv`)
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+              }}
+              className="bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-blue-200"
+            >
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        {/* AI Executive Summary */}
+        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-100 rounded-xl p-6 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
+          <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+             <SparklesIcon className="w-32 h-32 text-indigo-600" />
+          </div>
+          <div className="flex items-start gap-4 relative z-10">
+            <div className="bg-indigo-100 p-2.5 rounded-lg shrink-0 shadow-sm">
+              <SparklesIcon className="w-6 h-6 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-indigo-900">AI Executive Summary</h2>
+              {isLoadingSummary ? (
+                <div className="flex items-center gap-3 mt-3 text-indigo-600">
+                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>
+                   <p className="text-sm font-medium">Analyzing team activity & generating insights...</p>
+                </div>
+              ) : summary ? (
+                <p className="mt-2 text-sm text-indigo-800 leading-relaxed max-w-5xl whitespace-pre-wrap">
+                  {summary}
+                </p>
+              ) : null}
+            </div>
+          </div>
         </div>
 
         {/* Stat cards */}
@@ -99,26 +180,54 @@ export default function AnalyticsDashboard() {
           </div>
 
           <div className="bg-white p-6 rounded-xl border border-slate-100 shadow-sm flex flex-col">
-            <h2 className="text-lg font-bold text-slate-800 mb-6">Uploads (Last 30 Days)</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-6">Activity Breakdown</h2>
             <div className="w-full h-72">
-              {uploadData.length > 0 ? (
+              {data.activityByType && data.activityByType.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                  <BarChart data={uploadData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <BarChart data={prepareActivityData(data.activityByType)} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
-                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 11, fontWeight: 500 }} dy={10} />
+                    <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 11, fontWeight: 500 }} dy={10} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 11, fontWeight: 500 }} />
                     <RechartsTooltip cursor={{ fill: '#F8FAFC' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '13px', fontWeight: 'bold' }} />
-                    <Bar dataKey="uploads" fill="#3B82F6" radius={[4, 4, 0, 0]} barSize={32} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Bar dataKey="file_uploaded" stackId="a" fill="#3B82F6" name="Uploads" />
+                    <Bar dataKey="file_deleted" stackId="a" fill="#EF4444" name="Deletions" />
+                    <Bar dataKey="comment_created" stackId="a" fill="#10B981" name="Comments" />
+                    <Bar dataKey="file_downloaded" stackId="a" fill="#8B5CF6" name="Downloads" />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex items-center justify-center h-full text-slate-400 italic">No upload history.</div>
+                <div className="flex items-center justify-center h-full text-slate-400 italic">No activity breakdown available.</div>
               )}
             </div>
           </div>
         </div>
 
         {/* Tables */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
+              <h2 className="text-base font-bold text-slate-800">Top 5 Largest Files</h2>
+            </div>
+            <table className="w-full text-sm text-left">
+              <thead className="text-[11px] text-slate-400 uppercase bg-slate-50/50 tracking-wider">
+                <tr><th className="px-6 py-3 font-bold">File Name</th><th className="px-6 py-3 font-bold text-right">Size</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(data.largestFiles || []).length > 0 ? (data.largestFiles || []).map(f => (
+                  <tr key={f.file_id} className="hover:bg-blue-50/50 transition-colors">
+                    <td className="px-6 py-4 font-semibold text-slate-700 truncate max-w-[200px]" title={f.original_name}>
+                      {f.original_name}
+                    </td>
+                    <td className="px-6 py-4 text-right font-medium text-slate-600 whitespace-nowrap">{f.file_size_formatted}</td>
+                  </tr>
+                )) : <tr><td colSpan={2} className="px-6 py-8 text-center text-slate-400 italic">No files available</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Second Row of Tables */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
             <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">

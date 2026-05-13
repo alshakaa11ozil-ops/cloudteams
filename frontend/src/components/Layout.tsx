@@ -10,10 +10,10 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate, useMatch } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { useAuth } from '@/hooks/useAuth'
-import { useTeamSocket } from '@/hooks/useTeamSocket'
-import { fetchTeamMembers } from '@/api/teams'
-import { getAvatarColor, getInitials } from '@/utils/avatarColor'
+import { useAuth } from '../hooks/useAuth'
+import { useTeamSocket } from '../hooks/useTeamSocket'
+import { fetchTeamMembers } from '../api/teams'
+import { getAvatarColor, getInitials } from '../utils/avatarColor'
 
 // ─── NAV ITEMS ─────────────────────────────────────────────────────────────
 //
@@ -182,7 +182,7 @@ export default function Layout() {
             // WHY fire-and-forget with void: even if the backend call fails,
             // we still want to clear the local session. The user shouldn't be
             // stuck logged in because the server had a hiccup.
-            const { default: api } = await import('@/api/axios')
+            const { default: api } = await import('../api/axios')
             void api.post('/auth/logout').catch(() => {
                 // Silently ignore — local logout still happens below
             })

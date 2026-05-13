@@ -6,7 +6,7 @@
 // BASE URL pattern: /api/teams/:teamId/announcements
 
 import api from './axios'
-import type { Announcement } from '@/types'
+import type { Announcement } from '../types'
 export type { Announcement }
 
 

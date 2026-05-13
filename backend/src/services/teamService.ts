@@ -127,7 +127,7 @@ export async function getTeamById(teamId: number, userId: number) {
   // Manual counts for non-deleted items
   const [fileCount, documentCount, storageStats] = await Promise.all([
     prisma.file.count({ where: { team_id: teamId, is_deleted: false } }),
-    prisma.document.count({ where: { team_id: teamId, is_deleted: false } }),
+    prisma.documents.count({ where: { team_id: teamId, is_deleted: false } }),
     prisma.file.aggregate({
       where: { team_id: teamId, is_deleted: false },
       _sum: { file_size: true }

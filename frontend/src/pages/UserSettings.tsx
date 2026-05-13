@@ -11,10 +11,10 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { useAuth } from '@/hooks/useAuth'
-import api from '@/api/axios'
-import { getAvatarColor, getInitials } from '@/utils/avatarColor'
-import { setup2FA, verifyAndEnable2FA, disable2FA } from '@/api/auth'
+import { useAuth } from '../hooks/useAuth'
+import api from '../api/axios'
+import { getAvatarColor, getInitials } from '../utils/avatarColor'
+import { setup2FA, verifyAndEnable2FA, disable2FA } from '../api/auth'
 
 export default function UserSettings() {
     const { user, refreshUser } = useAuth()

@@ -11,14 +11,14 @@ import React, { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
-import { fetchActivity } from '@/api/files'
-import type { ActivityAction, ActivityEntry } from '@/types'
+import { fetchActivity } from '../api/files'
+import type { ActivityAction, ActivityEntry } from '../types'
 
 /**
  * Prioritizes full_name if available, otherwise falls back to username.
  */
 function getDisplayName(user: { username: string; full_name?: string | null }): string {
-    return user.full_name?.trim() || user.username
+  return user.full_name?.trim() || user.username
 }
 
 

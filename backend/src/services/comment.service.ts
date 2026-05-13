@@ -25,7 +25,7 @@ export const addComment = async (teamId: number, userId: number, content: string
         if (!file) throw new AppError('File not found or deleted', 404);
         itemName = file.original_name;
     } else if (documentId) {
-        const doc = await prisma.document.findFirst({
+        const doc = await prisma.documents.findFirst({
             where: { id: documentId, team_id: teamId, is_deleted: false }
         });
         if (!doc) throw new AppError('Document not found or deleted', 404);

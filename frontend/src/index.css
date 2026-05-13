@@ -1,15 +1,10 @@
 /* src/index.css */
-/* PURPOSE: These three lines activate Tailwind CSS.
-   @tailwind base     → Tailwind's CSS reset (removes browser default styles)
-   @tailwind components → Allows @apply directive in custom CSS
-   @tailwind utilities  → The actual utility classes (bg-blue-500, flex, etc.)
-   
-   WHY ONLY THREE LINES: Tailwind generates all real CSS at build time
-   by scanning your components. You never write raw CSS here. */
+/* PURPOSE: Activates Tailwind CSS v4.
+   In v4, a single @import replaces the three @tailwind directives from v3.
+   The Vite plugin handles scanning and code generation automatically. */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
 
 input:-webkit-autofill,
 input:-webkit-autofill:hover,

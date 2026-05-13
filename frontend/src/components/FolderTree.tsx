@@ -8,7 +8,7 @@
 //   onDeleteFolder — soft-delete a folder
 
 import { useState } from 'react'
-import type { FolderWithBreadcrumb } from '@/types'
+import type { FolderWithBreadcrumb } from '../types'
 
 interface FolderTreeProps {
   folders: FolderWithBreadcrumb[]

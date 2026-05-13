@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { getSharedLinkMetadata, downloadSharedFile, getSharedTeamContent } from '@/api/shares'
+import { getSharedLinkMetadata, downloadSharedFile, getSharedTeamContent, getSharedDocumentContent } from '../../api/shares'
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const FolderIcon = () => (
@@ -44,6 +44,8 @@ export default function PublicSharePage() {
     const [isPasswordVerified, setIsPasswordVerified] = useState(false)
     const [isDownloading, setIsDownloading] = useState<number | 'main' | false>(false)
     const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+    const [documentPreview, setDocumentPreview] = useState<{ html: string; title: string } | null>(null)
+    const [isDocumentLoading, setIsDocumentLoading] = useState(false)
 
     // Folder navigation state
     const [currentFolderId, setCurrentFolderId] = useState<number | null>(null)
@@ -86,6 +88,7 @@ export default function PublicSharePage() {
         setCurrentFolderId(entry.id)
         setBreadcrumbs(prev => prev.slice(0, index + 1))
         setPreviewBlob(null)
+        setDocumentPreview(null)
     }
 
     const handleDownload = async (e?: React.FormEvent, fileId?: number) => {
@@ -125,6 +128,19 @@ export default function PublicSharePage() {
             setPreviewBlob(blob)
         } catch {
             toast.error('Failed to load preview')
+        }
+    }
+
+    const handleViewDocument = async (documentId?: number) => {
+        if (metadata?.requiresPassword && !isPasswordVerified) return
+        setIsDocumentLoading(true)
+        try {
+            const content = await getSharedDocumentContent(token!, password || undefined, documentId)
+            setDocumentPreview(content)
+        } catch (err: any) {
+            toast.error(err.response?.data?.error || 'Failed to load document')
+        } finally {
+            setIsDocumentLoading(false)
         }
     }
 
@@ -250,6 +266,50 @@ export default function PublicSharePage() {
         )
     }
 
+    // ── Single document share ────────────────────────────────────────────────
+    if (metadata.type === 'document') {
+        if (!documentPreview && !isDocumentLoading) {
+            void handleViewDocument()
+        }
+
+        return (
+            <div className="min-h-screen bg-gray-50 flex flex-col p-4">
+                <div className="bg-white rounded-2xl shadow-xl border border-gray-100 max-w-4xl w-full mx-auto overflow-hidden flex-1 flex flex-col">
+                    <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center border border-indigo-100">
+                                <DocIcon />
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-bold text-gray-900 truncate max-w-lg" title={metadata.title}>
+                                    {metadata.title || 'Shared Document'}
+                                </h1>
+                                <p className="text-xs text-gray-500">Read Only</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 bg-white overflow-y-auto p-8 relative">
+                        {isDocumentLoading ? (
+                            <div className="flex justify-center items-center h-64 text-gray-400">
+                                <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+                            </div>
+                        ) : documentPreview ? (
+                            <div 
+                                className="prose prose-sm max-w-none prose-slate"
+                                dangerouslySetInnerHTML={{ __html: documentPreview.html }}
+                            />
+                        ) : (
+                            <div className="flex justify-center items-center h-64 text-red-500">
+                                Failed to load document content.
+                            </div>
+                        )}
+                    </div>
+                    <Footer />
+                </div>
+            </div>
+        )
+    }
+
     // ── Folder / Team share ──────────────────────────────────────────────────
     const totalItems =
         (sharedContent?.folders?.length ?? 0) +
@@ -296,8 +356,32 @@ export default function PublicSharePage() {
                     )}
                 </div>
 
+                    {/* Document Modal inside Team Share */}
+                    {documentPreview && (
+                        <div className="absolute inset-0 bg-white z-10 flex flex-col">
+                            <div className="p-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+                                <div className="flex items-center gap-2">
+                                    <DocIcon />
+                                    <h2 className="font-semibold text-gray-900 truncate max-w-[250px]">{documentPreview.title}</h2>
+                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full ml-2">Read Only</span>
+                                </div>
+                                <button onClick={() => setDocumentPreview(null)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-6 bg-white">
+                                <div className="prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: documentPreview.html }} />
+                            </div>
+                        </div>
+                    )}
+
                 {/* Content list */}
-                <div className="max-h-[420px] overflow-y-auto">
+                <div className="max-h-[420px] overflow-y-auto relative">
+                    {isDocumentLoading && !documentPreview && (
+                        <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
+                            <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                        </div>
+                    )}
                     {totalItems === 0 ? (
                         <div className="py-12 text-center text-gray-400">
                             <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
@@ -327,14 +411,17 @@ export default function PublicSharePage() {
                             {/* Native documents (read-only, no download) */}
                             {sharedContent?.documents?.map(doc => (
                                 <li key={`doc-${doc.id}`}>
-                                    <div className="flex items-center gap-3 px-5 py-3.5">
+                                    <button
+                                        onClick={() => void handleViewDocument(doc.id)}
+                                        className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50 transition-colors text-left group"
+                                    >
                                         <span className="text-indigo-500 flex-shrink-0"><DocIcon /></span>
                                         <div className="flex-1 min-w-0">
                                             <p className="text-sm font-medium text-gray-900 truncate">{doc.title}</p>
                                             <p className="text-xs text-gray-400">Document</p>
                                         </div>
-                                        <span className="text-xs text-gray-300 italic">View only</span>
-                                    </div>
+                                        <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">Click to view</span>
+                                    </button>
                                 </li>
                             ))}
 

@@ -12,7 +12,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { joinTeamByCode } from '@/api/teams'
+import { joinTeamByCode } from '../api/teams'
 
 export default function JoinTeam() {
     const { code: urlCode } = useParams<{ code?: string }>()

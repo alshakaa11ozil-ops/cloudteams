@@ -7,9 +7,9 @@
 // we fix it in one place here — not in every component that fetches teams.
 // Also makes functions easy to reuse across multiple pages.
 
-import api from '@/api/axios'
+import api from '../api/axios'
 
-import type { Team, TeamMember } from '@/types'
+import type { Team, TeamMember } from '../types'
 
 // ── fetchTeams ───────────────────────────────────────────────────────────────
 //

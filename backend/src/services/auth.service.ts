@@ -318,7 +318,7 @@ export async function logout(authHeader: string | undefined): Promise<void> {
   // logout twice), the UNIQUE constraint fires — we catch and ignore it
   // because the end result is the same: the token is blacklisted.
   try {
-    await prisma.tokenBlacklist.create({
+    await prisma.token_blacklist.create({
       data: {
         token,
         expires_at: expiresAt

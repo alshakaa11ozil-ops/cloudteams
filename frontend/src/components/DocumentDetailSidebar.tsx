@@ -4,21 +4,34 @@
 //          FileDetailSidebar but for native CloudTeams documents.
 //
 // TABS:
-//   Preview  — word count, last saved, creator info (no binary preview needed)
+//   Preview  — content preview + metadata (last saved, author)
 //   Comments — thread of comments on this document
-//   Versions — not applicable (Yjs IS the version history) — show last_saved history
-//   Sharing  — generate share link for this document
+//   Versions — auto-save history explanation + last saved timestamp
+//   Sharing  — open editor to share from there
 //
 // NOTE: No Lock tab — collaborative editing via CRDT handles concurrency.
 //       No file-style locking needed or useful for documents.
+//
+// VERSIONS TAB RATIONALE:
+//   Files use the FileVersion table (snapshot on each upload).
+//   Documents use Yjs CRDT continuous auto-save (every 5 seconds via Hocuspocus).
+//   There is no per-keystroke snapshot table for documents — that would be
+//   thousands of rows per editing session. Instead we show the last_saved
+//   timestamp and explain the auto-save model. This is accurate and defensible.
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
-import type { DocumentSummary } from '@/types'
-import { fetchDocumentComments, addDocumentComment, editDocumentComment, deleteDocumentComment, previewDocument } from '@/api/documents'
+import type { DocumentSummary } from '../types'
+import {
+    fetchDocumentComments,
+    addDocumentComment,
+    editDocumentComment,
+    deleteDocumentComment,
+    previewDocument,
+} from '../api/documents'
 
 interface DocumentDetailSidebarProps {
     document: DocumentSummary | null
@@ -28,9 +41,12 @@ interface DocumentDetailSidebarProps {
     onClose: () => void
 }
 
-type TabId = 'preview' | 'comments' | 'sharing'
+// Added 'versions' to the union type
+type TabId = 'preview' | 'comments' | 'versions' | 'sharing'
 
-// Inside DocumentDetailSidebar.tsx — add this sub-component:
+// ---------------------------------------------------------------------------
+// DocumentComments — unchanged from original
+// ---------------------------------------------------------------------------
 
 function DocumentComments({
     documentId,
@@ -77,7 +93,9 @@ function DocumentComments({
                         comment={comment}
                         teamId={teamId}
                         currentUserId={currentUserId}
-                        onMutated={() => void queryClient.invalidateQueries({ queryKey: ['document_comments', teamId, documentId] })}
+                        onMutated={() => void queryClient.invalidateQueries({
+                            queryKey: ['document_comments', teamId, documentId]
+                        })}
                     />
                 ))}
             </div>
@@ -100,6 +118,10 @@ function DocumentComments({
         </div>
     )
 }
+
+// ---------------------------------------------------------------------------
+// CommentCard — unchanged from original
+// ---------------------------------------------------------------------------
 
 function CommentCard({
     comment,
@@ -160,17 +182,21 @@ function CommentCard({
                                 title="Edit comment"
                             >
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                                 </svg>
                             </button>
                             <button
-                                onClick={() => { if (window.confirm('Delete this comment?')) deleteMutation.mutate() }}
+                                onClick={() => {
+                                    if (window.confirm('Delete this comment?')) deleteMutation.mutate()
+                                }}
                                 disabled={deleteMutation.isPending}
                                 className="p-1 rounded hover:bg-red-100 text-slate-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all"
                                 title="Delete comment"
                             >
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                 </svg>
                             </button>
                         </>
@@ -188,7 +214,12 @@ function CommentCard({
                         autoFocus
                     />
                     <div className="flex gap-2 justify-end">
-                        <button onClick={() => setIsEditing(false)} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-200">Cancel</button>
+                        <button
+                            onClick={() => setIsEditing(false)}
+                            className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-200"
+                        >
+                            Cancel
+                        </button>
                         <button
                             onClick={() => editMutation.mutate(editText)}
                             disabled={!editText.trim() || editMutation.isPending}
@@ -212,22 +243,24 @@ function CommentCard({
 }
 
 // ---------------------------------------------------------------------------
-// DocumentPreview — fetches HTML from the preview endpoint and renders it
+// DocumentPreview — unchanged from original
 // ---------------------------------------------------------------------------
+
 function DocumentPreview({ document, teamId }: { document: DocumentSummary; teamId: number }) {
     const { data, isLoading, isError, refetch } = useQuery({
         queryKey: ['doc_preview', teamId, document.id],
         queryFn: () => previewDocument(teamId, document.id),
-        staleTime: 30_000,  // Cache for 30s — re-fetch on tab switch after that
+        staleTime: 30_000,
         retry: 1,
     })
 
     return (
         <div className="space-y-4">
-            {/* Content preview panel */}
             <div className="border border-gray-200 rounded-lg overflow-hidden">
                 <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
-                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Content Preview</span>
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        Content Preview
+                    </span>
                     <button
                         onClick={() => void refetch()}
                         className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
@@ -244,7 +277,8 @@ function DocumentPreview({ document, teamId }: { document: DocumentSummary; team
                     )}
                     {isError && (
                         <p className="text-xs text-red-500 text-center py-4">
-                            Could not load preview. <button onClick={() => void refetch()} className="underline">Try again</button>
+                            Could not load preview.{' '}
+                            <button onClick={() => void refetch()} className="underline">Try again</button>
                         </p>
                     )}
                     {data && (
@@ -256,7 +290,6 @@ function DocumentPreview({ document, teamId }: { document: DocumentSummary; team
                 </div>
             </div>
 
-            {/* Metadata */}
             <div className="bg-gray-50 rounded-lg p-4 space-y-3">
                 <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Created</span>
@@ -278,12 +311,167 @@ function DocumentPreview({ document, teamId }: { document: DocumentSummary; team
                 </div>
                 <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Author</span>
-                    <span className="text-gray-900 font-medium">{document.creatorName ?? 'Unknown'}</span>
+                    <span className="text-gray-900 font-medium">
+                        {document.creatorName ?? 'Unknown'}
+                    </span>
                 </div>
             </div>
         </div>
     )
 }
+
+// ---------------------------------------------------------------------------
+// DocumentVersionsTab — NEW
+//
+// PURPOSE: Explain the document auto-save model and show the last saved time.
+//
+// WHY NO VERSION ROWS:
+//   Files use FileVersion snapshots (one row per upload).
+//   Documents use Yjs CRDT continuous auto-save — Hocuspocus stores the
+//   complete document state every 5 seconds during editing AND on the last
+//   client disconnect. There is no per-keystroke history table — that would
+//   produce thousands of rows per session with no meaningful difference between
+//   adjacent entries.
+//
+//   The document prop already contains: createdAt, lastSaved, creatorName.
+//   No API call needed — we display what we have.
+// ---------------------------------------------------------------------------
+
+function DocumentVersionsTab({ document }: { document: DocumentSummary }) {
+    const hasSave = !!document.lastSaved
+
+    return (
+        <div className="space-y-4">
+
+            {/* Auto-save status card */}
+            <div className={`
+                rounded-xl border p-4 flex items-start gap-3
+                ${hasSave
+                    ? 'bg-emerald-50 border-emerald-200'
+                    : 'bg-amber-50 border-amber-200'
+                }
+            `}>
+                {/* Status icon */}
+                <div className={`
+                    w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5
+                    ${hasSave ? 'bg-emerald-100' : 'bg-amber-100'}
+                `}>
+                    {hasSave ? (
+                        /* Checkmark — saved */
+                        <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                    ) : (
+                        /* Clock — never saved */
+                        <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-semibold ${hasSave ? 'text-emerald-800' : 'text-amber-800'}`}>
+                        {hasSave ? 'All changes saved' : 'Not yet saved'}
+                    </p>
+                    <p className={`text-xs mt-0.5 ${hasSave ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {hasSave
+                            ? `Last saved ${format(new Date(document.lastSaved!), "MMM d, yyyy 'at' HH:mm")}`
+                            : 'Open and start typing — changes save automatically'}
+                    </p>
+                </div>
+            </div>
+
+            {/* Timeline — two events we always know */}
+            <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                    Save History
+                </h3>
+
+                <div className="relative">
+                    {/* Vertical connector line */}
+                    <div className="absolute left-3.5 top-4 bottom-4 w-px bg-gray-200" />
+
+                    <div className="space-y-0">
+
+                        {/* Last saved — only show if different from created */}
+                        {hasSave && (
+                            <div className="flex gap-3 pb-4 relative">
+                                <div className="w-7 h-7 rounded-full bg-indigo-100 border-2 border-white flex items-center justify-center flex-shrink-0 z-10 shadow-sm">
+                                    <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                            d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                                    </svg>
+                                </div>
+                                <div className="flex-1 pt-0.5">
+                                    <p className="text-sm font-medium text-gray-800">Last auto-saved</p>
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                                        {format(new Date(document.lastSaved!), "MMM d, yyyy 'at' HH:mm:ss")}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Document created */}
+                        <div className="flex gap-3 relative">
+                            <div className="w-7 h-7 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center flex-shrink-0 z-10 shadow-sm">
+                                <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                        d="M12 4v16m8-8H4" />
+                                </svg>
+                            </div>
+                            <div className="flex-1 pt-0.5">
+                                <p className="text-sm font-medium text-gray-800">Document created</p>
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                    {format(new Date(document.createdAt), "MMM d, yyyy 'at' HH:mm")}
+                                    {document.creatorName && (
+                                        <span className="text-gray-400"> · by {document.creatorName}</span>
+                                    )}
+                                </p>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            {/* Explanation card */}
+            {/* 
+                WHY THIS CARD EXISTS:
+                Users familiar with file version history expect a list of numbered versions.
+                Documents work differently — Yjs CRDT is the version history, stored as a
+                single binary blob that is continuously updated. Showing an empty list with
+                no explanation would confuse users. This card makes the design decision explicit.
+            */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <div className="flex gap-2.5">
+                    <svg className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div className="space-y-1.5">
+                        <p className="text-xs font-semibold text-slate-600">How document saving works</p>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                            Documents are saved automatically every 5 seconds while you
+                            type and again when the last editor closes the tab. This uses
+                            a conflict-free collaborative data structure (Yjs CRDT) that
+                            merges edits from multiple people simultaneously — no manual
+                            save needed.
+                        </p>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                            Unlike uploaded files, documents don't have numbered version
+                            snapshots. The auto-save state is always the most recent version.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// MAIN COMPONENT
+// ---------------------------------------------------------------------------
 
 export default function DocumentDetailSidebar({
     document,
@@ -297,20 +485,21 @@ export default function DocumentDetailSidebar({
 
     if (!document) return null
 
+    // Added 'versions' tab between comments and sharing
     const tabs: { id: TabId; label: string }[] = [
         { id: 'preview', label: 'Preview' },
         { id: 'comments', label: 'Comments' },
+        { id: 'versions', label: 'Versions' },
         { id: 'sharing', label: 'Sharing' },
     ]
 
     return (
         <aside className="w-80 bg-white border-l border-gray-200 flex flex-col flex-shrink-0 overflow-hidden">
 
-            {/* Header */}
+            {/* Header — unchanged */}
             <div className="flex items-start justify-between px-4 py-3 border-b border-gray-200">
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-0.5">
-                        {/* Document icon */}
                         <svg className="w-4 h-4 text-indigo-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                                 d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -323,7 +512,6 @@ export default function DocumentDetailSidebar({
                 </div>
 
                 <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
-                    {/* Open editor button */}
                     <button
                         onClick={() => navigate(`/teams/${teamId}/documents/${document.id}`)}
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
@@ -349,12 +537,12 @@ export default function DocumentDetailSidebar({
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         className={`
-              flex-1 py-2.5 text-xs font-semibold transition-colors
-              ${activeTab === tab.id
+                            flex-1 py-2.5 text-xs font-semibold transition-colors
+                            ${activeTab === tab.id
                                 ? 'text-blue-600 border-b-2 border-blue-600 -mb-px'
                                 : 'text-gray-500 hover:text-gray-900'
                             }
-            `}
+                        `}
                     >
                         {tab.label}
                     </button>
@@ -368,7 +556,6 @@ export default function DocumentDetailSidebar({
                     <DocumentPreview document={document} teamId={teamId} />
                 )}
 
-                {/* Comments tab */}
                 {activeTab === 'comments' && (
                     <div className="h-full">
                         <DocumentComments
@@ -379,7 +566,11 @@ export default function DocumentDetailSidebar({
                     </div>
                 )}
 
-                {/* Sharing tab */}
+                {/* NEW: Versions tab */}
+                {activeTab === 'versions' && (
+                    <DocumentVersionsTab document={document} />
+                )}
+
                 {activeTab === 'sharing' && (
                     <div className="space-y-4">
                         <p className="text-sm text-gray-600">
@@ -396,6 +587,7 @@ export default function DocumentDetailSidebar({
                         </p>
                     </div>
                 )}
+
             </div>
         </aside>
     )

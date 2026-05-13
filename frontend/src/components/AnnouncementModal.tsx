@@ -19,8 +19,8 @@ import toast from 'react-hot-toast'
 import {
     createAnnouncement,
     updateAnnouncement,
-} from '@/api/announcements'
-import type { Announcement } from '@/types'
+} from '../api/announcements'
+import type { Announcement } from '../types'
 
 interface AnnouncementModalProps {
     teamId: number

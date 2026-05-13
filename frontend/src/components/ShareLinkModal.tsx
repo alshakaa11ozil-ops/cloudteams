@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { createFolderShareLink, createFileShareLink, SharedLink } from '@/api/shares'
+import { createFolderShareLink, createFileShareLink, createDocumentShareLink, type SharedLink } from '../api/shares'
 
 interface ShareLinkModalProps {
-    itemType: 'file' | 'folder'
+    itemType: 'file' | 'folder' | 'document'
     itemId: number
     teamId: number
     itemName: string
@@ -27,6 +27,8 @@ export default function ShareLinkModal({ itemType, itemId, teamId, itemName, onC
             }
             if (itemType === 'folder') {
                 return createFolderShareLink(itemId, teamId, options)
+            } else if (itemType === 'document') {
+                return createDocumentShareLink(itemId, teamId, options)
             } else {
                 return createFileShareLink(itemId, teamId, options)
             }
@@ -66,7 +68,7 @@ export default function ShareLinkModal({ itemType, itemId, teamId, itemName, onC
                 {/* Header */}
                 <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                     <div>
-                        <h2 className="text-lg font-bold text-gray-900">Share {itemType === 'folder' ? 'Folder' : 'File'}</h2>
+                        <h2 className="text-lg font-bold text-gray-900">Share {itemType === 'folder' ? 'Folder' : itemType === 'document' ? 'Document' : 'File'}</h2>
                         <p className="text-sm font-medium text-blue-600 truncate max-w-[250px]">{itemName}</p>
                     </div>
                     <button
@@ -95,7 +97,7 @@ export default function ShareLinkModal({ itemType, itemId, teamId, itemName, onC
                                     placeholder="Leave empty for public link"
                                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors text-sm"
                                 />
-                                <p className="text-[11px] text-gray-400 mt-1">If set, anyone with the link must enter this password to download.</p>
+                                <p className="text-[11px] text-gray-400 mt-1">If set, anyone with the link must enter this password to view or download.</p>
                             </div>
 
                             {/* Expiry */}
@@ -120,7 +122,7 @@ export default function ShareLinkModal({ itemType, itemId, teamId, itemName, onC
                                 {/* Download Limit */}
                                 <div>
                                     <label className="block text-sm font-semibold text-gray-900 mb-1.5">
-                                        Max Downloads
+                                        Max Views/Downloads
                                     </label>
                                     <input
                                         type="number"

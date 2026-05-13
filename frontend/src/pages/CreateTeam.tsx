@@ -13,7 +13,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { createTeam } from '@/api/teams'
+import { createTeam } from '../api/teams'
 
 // ─── 1. ZOD SCHEMA ─────────────────────────────────────────────────────────
 
@@ -218,8 +218,8 @@ export default function CreateTeam() {
                             </label>
                             {/* Live character counter */}
                             <span className={`text-xs ${descriptionValue.length > 180
-                                    ? 'text-red-500'      // warn when close to limit
-                                    : 'text-gray-400'
+                                ? 'text-red-500'      // warn when close to limit
+                                : 'text-gray-400'
                                 }`}>
                                 {descriptionValue.length}/200
                             </span>

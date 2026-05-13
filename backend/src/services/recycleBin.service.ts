@@ -1,11 +1,11 @@
-import fs from 'fs';
-import path from 'path';
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityAction } from '../utils/activityLogger';
 import { emitToTeam } from '../socket';
 import { SOCKET_EVENTS } from '../config/socketEvents';
 import { DocumentSummary } from './document.service';
+import { deleteFile as r2Delete } from './storage.service';
+
 
 /**
  * List all soft-deleted files for a team.
@@ -35,9 +35,9 @@ export const listDeletedFiles = async (teamId: number, userId: number) => {
 };
 export const listDeletedDocuments = async (teamId: number, userId: number): Promise<DocumentSummary[]> => {
     await assertTeamMember(userId, teamId, 'viewer');
-    const docs = await prisma.document.findMany({
+    const docs = await prisma.documents.findMany({
         where: { team_id: teamId, is_deleted: true },
-        include: { creator: { select: { id: true, username: true, email: true, full_name: true } } },
+        include: { users: { select: { id: true, username: true, email: true, full_name: true } } },
         orderBy: { deleted_at: 'desc' },
     });
 
@@ -46,7 +46,7 @@ export const listDeletedDocuments = async (teamId: number, userId: number): Prom
         title: d.title,
         folderId: d.folder_id,
         createdBy: d.created_by,
-        creatorName: d.creator.full_name ?? d.creator.username ?? null,
+        creatorName: d.users.full_name ?? d.users.username ?? null,
         lastSaved: d.last_saved,
         createdAt: d.created_at,
         updatedAt: d.updated_at,
@@ -155,9 +155,9 @@ export const restoreDocument = async (
     // Only editors/admins can restore a document
     await assertTeamMember(userId, teamId, 'editor');
 
-    const document = await prisma.document.findFirst({
+    const document = await prisma.documents.findFirst({
         where: { id: documentId, team_id: teamId, is_deleted: true },
-        include: { folder: true }
+        include: { folders: true }
     });
 
     if (!document) {
@@ -165,11 +165,11 @@ export const restoreDocument = async (
     }
 
     let finalFolderId = document.folder_id;
-    if (document.folder && document.folder.is_deleted) {
+    if (document.folders && document.folders.is_deleted) {
         finalFolderId = null;
     }
 
-    const updatedDocument = await prisma.document.update({
+    const updatedDocument = await prisma.documents.update({
         where: { id: documentId },
         data: {
             is_deleted: false,
@@ -276,9 +276,9 @@ export const getDeletedFolderContents = async (folderId: number, teamId: number,
     });
 
     // Get deleted documents
-    const childDocuments = await prisma.document.findMany({
+    const childDocuments = await prisma.documents.findMany({
         where: { team_id: teamId, folder_id: folderId, is_deleted: true },
-        include: { creator: { select: { id: true, username: true, email: true } } },
+        include: { users: { select: { id: true, username: true, email: true } } },
         orderBy: { deleted_at: 'desc' }
     });
 
@@ -348,7 +348,7 @@ export const restoreFolder = async (
             data: { is_deleted: false, deleted_at: null },
         }),
         // Restore all documents living inside those folders
-        prisma.document.updateMany({
+        prisma.documents.updateMany({
             where: {
                 team_id: teamId,
                 folder_id: { in: allFolderIdsToRestore },
@@ -407,57 +407,101 @@ export const restoreFolder = async (
  * Internal Helper: The actual logic for physical deletion and database removal.
  * Assumes the caller has already verified administrative permissions.
  */
-async function performHardDeleteFile(fileId: number, teamId: number) {
-    const file = await prisma.file.findFirst({
-        where: { id: fileId, team_id: teamId, is_deleted: true }
-    });
-
-    if (!file) {
-        throw new AppError('File not found in recycle bin', 404);
-    }
-
-    const storagePath = file.storage_path;
-
-    // Remove from database forever
-    await prisma.file.delete({ where: { id: fileId } });
-
-    // DEDUPLICATION CHECK: Does ANY other File or FileVersion use this exact storage path?
-    const otherFilesUsingPath = await prisma.file.count({ where: { storage_path: storagePath } });
-    const versionsUsingPath = await prisma.fileVersion.count({ where: { storage_path: storagePath } });
-
-    if (otherFilesUsingPath === 0 && versionsUsingPath === 0) {
-        // Absolutely no one is using this physical file. Delete it from the hard drive.
-        const absolutePath = path.resolve(storagePath);
-        if (fs.existsSync(absolutePath)) {
-            try {
-                fs.unlinkSync(absolutePath);
-            } catch (err) {
-                console.error(`Failed to delete physical file at ${absolutePath}`, err);
-            }
-        }
-    }
-}
+// src/services/recycleBin.service.ts
+// ─── ONLY REPLACE THIS FUNCTION ───────────────────────────────────────────────
 
 /**
- * Permanently deletes a file from the database and physically from disk (if no other DB records share it).
+ * Internal Helper: The actual logic for R2 deletion and database removal.
+ * Assumes the caller has already verified administrative permissions.
+ *
+ * PURPOSE: Permanently remove a file from the database AND from R2 storage,
+ *          but ONLY delete the R2 object if no other DB record references it.
+ *
+ * WHY THE DEDUP CHECK:
+ *   Deduplication means two DB records can point at the same R2 object key
+ *   (storage_path). If we deleted the R2 object whenever any record was
+ *   removed, the second record would point at a ghost — R2 returns 404,
+ *   download fails. We count ALL references (files + versions) before
+ *   touching R2.
+ *
+ * NOTE: We delete the DB record FIRST, then check the count.
+ *   This means the count query no longer sees the deleted record —
+ *   so a count of 0 means "truly nobody else uses this object".
+ *   If we checked BEFORE deleting, the count would include the record
+ *   we're about to remove and we'd always get count ≥ 1, never deleting R2.
  */
-export const hardDeleteFile = async (fileId: number, teamId: number, userId: number) => {
-    // Only admins can permanently delete
-    await assertTeamMember(userId, teamId, 'admin');
-
-    // Fetch the file metadata before it is purged from the DB
+async function performHardDeleteFile(fileId: number, teamId: number) {
     const file = await prisma.file.findFirst({
         where: { id: fileId, team_id: teamId, is_deleted: true },
-        select: { original_name: true }
     });
 
     if (!file) {
         throw new AppError('File not found in recycle bin', 404);
     }
 
+    // Save the storage_path BEFORE deleting — we need it for the R2 check below.
+    // After prisma.file.delete(), the `file` object still has the value in memory,
+    // but saving it explicitly makes the intent clear.
+    const storagePath = file.storage_path;
+
+    // Step 1: Remove from database forever.
+    await prisma.file.delete({ where: { id: fileId } });
+
+    // Step 2: DEDUPLICATION CHECK — does any other record still reference this R2 object?
+    // We check both files AND fileVersions because:
+    //   - A version snapshot may still point at the same object key
+    //   - Deleting R2 while a version references it would break version restore
+    const otherFilesUsingPath = await prisma.file.count({
+        where: { storage_path: storagePath },
+    });
+    const versionsUsingPath = await prisma.fileVersion.count({
+        where: { storage_path: storagePath },
+    });
+
+    if (otherFilesUsingPath === 0 && versionsUsingPath === 0) {
+        // Nobody else references this R2 object. Safe to delete.
+        // r2Delete is already imported at the top of your file.
+        try {
+            await r2Delete(storagePath);
+        } catch (err) {
+            // R2 deletion failed — log it but don't throw.
+            // The DB record is already gone. A failed R2 delete leaves an
+            // orphaned object (wasted storage) but doesn't corrupt data.
+            // In production you'd add this to a cleanup queue.
+            console.error(
+                `[RecycleBin] Failed to delete R2 object at key "${storagePath}":`,
+                err
+            );
+        }
+    }
+    // If count > 0: another record still needs this R2 object — leave it alone.
+}
+/**
+ * Permanently deletes a single file from the recycle bin.
+ * Public wrapper around performHardDeleteFile that adds permission check + audit log.
+ * Called by hardDeleteFileHandler in the controller.
+ */
+export const hardDeleteFile = async (
+    fileId: number,
+    teamId: number,
+    userId: number
+): Promise<{ message: string }> => {
+    // Only admins can permanently delete — same rule as hardDeleteFolder
+    await assertTeamMember(userId, teamId, 'admin');
+
+    // Fetch name before deletion for the audit log — after delete it's gone
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: true },
+        select: { original_name: true },
+    });
+
+    if (!file) {
+        throw new AppError('File not found in recycle bin', 404);
+    }
+
+    // performHardDeleteFile handles: DB delete + dedup check + R2 delete
     await performHardDeleteFile(fileId, teamId);
 
-    // Audit: permanent deletion is admin-only so we log it for full accountability.
     void logActivity({
         teamId,
         userId,
@@ -466,15 +510,26 @@ export const hardDeleteFile = async (fileId: number, teamId: number, userId: num
         targetId: fileId,
         metadata: {
             file_name: file.original_name,
-            permanent: true
+            permanent: true,
         },
     });
 
     return { message: 'File permanently deleted' };
 };
+/**
+ * Permanently deletes a file from the database and physically from disk (if no other DB records share it).
+ */
+// --- REPLACE permanentDelete in recycleBin.service.ts ---
+// PURPOSE: Delete the DB record AND the R2 object.
+// WHY BOTH: Soft delete only hides the DB record. Permanent delete must
+// also free the R2 storage, otherwise you accumulate orphaned objects.
+// NOTE: Only delete R2 object if no other file record uses the same hash
+// (deduplication means multiple DB records may share one R2 object).
+
+
 
 async function performHardDeleteDocument(documentId: number, teamId: number) {
-    const document = await prisma.document.findFirst({
+    const document = await prisma.documents.findFirst({
         where: { id: documentId, team_id: teamId, is_deleted: true }
     });
 
@@ -482,13 +537,13 @@ async function performHardDeleteDocument(documentId: number, teamId: number) {
         throw new AppError('Document not found in recycle bin', 404);
     }
 
-    await prisma.document.delete({ where: { id: documentId } });
+    await prisma.documents.delete({ where: { id: documentId } });
 }
 
 export const hardDeleteDocument = async (documentId: number, teamId: number, userId: number) => {
     await assertTeamMember(userId, teamId, 'admin');
 
-    const document = await prisma.document.findFirst({
+    const document = await prisma.documents.findFirst({
         where: { id: documentId, team_id: teamId, is_deleted: true },
         select: { title: true }
     });
@@ -546,7 +601,7 @@ export const hardDeleteFolder = async (folderId: number, teamId: number, userId:
     });
 
     // Get all documents inside these folders
-    const documentsToDelete = await prisma.document.findMany({
+    const documentsToDelete = await prisma.documents.findMany({
         where: { team_id: teamId, folder_id: { in: folderIdsToDelete }, is_deleted: true },
         select: { id: true }
     });
@@ -604,7 +659,7 @@ export const emptyRecycleBin = async (teamId: number, userId: number) => {
         await performHardDeleteFile(file.id, teamId);
     }
 
-    const allDeletedDocuments = await prisma.document.findMany({
+    const allDeletedDocuments = await prisma.documents.findMany({
         where: { team_id: teamId, is_deleted: true },
         select: { id: true }
     });

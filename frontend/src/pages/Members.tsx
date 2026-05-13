@@ -9,9 +9,9 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchTeam, fetchTeamMembers } from '@/api/teams'
-import type { TeamMember, TeamRole } from '@/types'
-import { useAuth } from '@/hooks/useAuth'
+import { fetchTeam, fetchTeamMembers } from '../api/teams'
+import type { TeamMember, TeamRole } from '../types'
+import { useAuth } from '../hooks/useAuth'
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 

@@ -34,13 +34,16 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, FileText, Loader2, Download } from 'lucide-react'
-import CollaborativeEditor, { DocumentName } from '@/components/editor/CollaborativeEditor'
+import { ArrowLeft, FileText, Loader2, Download, History, Share2 } from 'lucide-react'
+import CollaborativeEditor, { type DocumentName } from '../components/editor/CollaborativeEditor'
 import type { AxiosError } from 'axios'
 import axios from 'axios'
-import { useAuth } from '@/hooks/useAuth'
-import { fetchDocument, renameDocument } from '@/api/documents'
-import { exportToDocx } from '@/utils/exportDocx'
+import { useAuth } from '../hooks/useAuth'
+import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
+import VersionHistoryPanel from '../components/editor/VersionHistoryPanel'
+import ShareLinkModal from '../components/ShareLinkModal'
+import DocumentShareLinksPanel from '../components/editor/DocumentShareLinksPanel'
+import type { TeamRole } from '../types'
 import type { Editor } from '@tiptap/react'
 
 // ---------------------------------------------------------------------------
@@ -100,6 +103,22 @@ export default function DocumentEditor() {
   // CollaborativeEditor exposes it via the onEditorReady callback
   const editorRef = useRef<Editor | null>(null)
 
+  // ── Version History state ──────────────────────────────────────────────────
+  const [showHistory, setShowHistory] = useState(false)
+
+  // ── Share Modal state ──────────────────────────────────────────────────────
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [showShareLinks, setShowShareLinks] = useState(false)
+  const [userRole, setUserRole] = useState<TeamRole>('viewer')
+
+  // ── Lock state ─────────────────────────────────────────────────────────────
+  // lockOwnerUserId: who currently holds the lock (null = unlocked)
+  // isLockedByMe: the current user is the one who locked it
+  // isLockedByOther: document is locked by a different user → enforce readOnly
+  const [lockOwnerUserId, setLockOwnerUserId] = useState<number | null>(null)
+  const [lockExpiresAt, setLockExpiresAt] = useState<string | null>(null)
+  const [isLockLoading, setIsLockLoading] = useState(false)
+
   // --------------------------------------------------------------------------
   // FETCH: Document metadata or file open-editor data
   // --------------------------------------------------------------------------
@@ -118,6 +137,17 @@ export default function DocumentEditor() {
           const doc = await fetchDocument(teamId, docId!)
           setTitle(doc.title)
           setEditTitle(doc.title)
+          // Hydrate lock state from the initial document fetch
+          setLockOwnerUserId(doc.lockOwnerUserId ?? null)
+          setLockExpiresAt(doc.lockExpiresAt ?? null)
+
+          // Fetch user role for this team (used by ShareLinksPanel + force-unlock)
+          try {
+            const { default: api } = await import('../api/axios')
+            const memberRes = await api.get(`/teams/${teamId}/members/me`)
+            if (memberRes.data?.role) setUserRole(memberRes.data.role)
+          } catch { /* non-critical — role stays 'viewer' as default */ }
+
           setLoadState('ready')
         } catch (err: any) {
           const status = err.response?.status
@@ -208,6 +238,52 @@ export default function DocumentEditor() {
   }
 
   // --------------------------------------------------------------------------
+  // HANDLER: Lock / Unlock document
+  // --------------------------------------------------------------------------
+  const isLockActive = !!lockOwnerUserId &&
+    !!lockExpiresAt &&
+    new Date(lockExpiresAt) > new Date()
+
+  const isLockedByMe = isLockActive && lockOwnerUserId === user?.id
+  const isLockedByOther = isLockActive && lockOwnerUserId !== user?.id
+
+  const handleToggleLock = async () => {
+    if (!teamId || !docId || isLockLoading) return
+    setIsLockLoading(true)
+    try {
+      if (isLockedByMe) {
+        await unlockDocument(teamId, docId)
+        setLockOwnerUserId(null)
+        setLockExpiresAt(null)
+      } else {
+        const result = await lockDocument(teamId, docId)
+        setLockOwnerUserId(result.lockOwnerUserId)
+        setLockExpiresAt(result.lockExpiresAt)
+      }
+    } catch (err: any) {
+      console.error('[DocumentEditor] Lock toggle failed:', err.response?.data?.error || err.message)
+    } finally {
+      setIsLockLoading(false)
+    }
+  }
+
+  const handleForceUnlock = async () => {
+    if (!teamId || !docId || isLockLoading) return
+    if (!window.confirm('Are you sure you want to force-unlock this document? This will kick out the current editor!')) return
+    
+    setIsLockLoading(true)
+    try {
+      await forceUnlockDocument(teamId, docId)
+      setLockOwnerUserId(null)
+      setLockExpiresAt(null)
+    } catch (err: any) {
+      console.error('[DocumentEditor] Force unlock failed:', err.response?.data?.error || err.message)
+    } finally {
+      setIsLockLoading(false)
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // RENDER: Loading skeleton
   // --------------------------------------------------------------------------
   if (loadState === 'loading') {
@@ -222,19 +298,18 @@ export default function DocumentEditor() {
   }
 
   // --------------------------------------------------------------------------
-  // RENDER: Error state
+  // RENDER: Error state or Auth guard
   // --------------------------------------------------------------------------
-  // Problem 6 fix: Show a clean error when the docId doesn't exist in the DB.
-  // Without this, users would see a blank editor that silently loses all content.
-  // --------------------------------------------------------------------------
-  if (error) {
+  if (error || !user) {
     return (
       <div className="h-screen bg-slate-900 flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto">
             <FileText className="w-8 h-8 text-red-400" />
           </div>
-          <p className="text-slate-300 font-medium">{error}</p>
+          <p className="text-slate-300 font-medium">
+            {!user ? 'Authentication required' : error}
+          </p>
           <button
             onClick={() => navigate(-1)}
             className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition-colors"
@@ -252,7 +327,25 @@ export default function DocumentEditor() {
   return (
     <div className="h-screen bg-slate-900 flex flex-col overflow-hidden">
 
+      {/* ── Lock Banner (locked by someone else) ──────────────────────────── */}
+      {isLockedByOther && (
+        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-2 bg-amber-500/20 border-b border-amber-500/30 text-amber-300 text-xs font-medium">
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+          <span>
+            This document is currently locked for editing by another user.
+            {lockExpiresAt && (
+              <> Lock expires at {new Date(lockExpiresAt).toLocaleTimeString()}.</>
+            )}
+            &nbsp;You are in <strong>read-only</strong> mode.
+          </span>
+        </div>
+      )}
+
       {/* ── Header ────────────────────────────────────────────────────────── */}
+
       <header className="flex-shrink-0 flex items-center justify-between px-4 py-3 bg-slate-800 border-b border-slate-700">
 
         {/* Back navigation */}
@@ -309,8 +402,104 @@ export default function DocumentEditor() {
           )}
         </div>
 
-        {/* Right side — Export button (Addition 3) */}
-        <button
+        {/* Right side — Share, Export, and History buttons */}
+        <div className="flex items-center gap-2">
+          {mode === 'document' && (
+            <div className="flex items-center gap-1 bg-slate-700/50 p-1 rounded-lg">
+              <button
+                onClick={() => setIsShareModalOpen(true)}
+                className="
+                  flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors
+                  text-slate-300 hover:text-white hover:bg-slate-600
+                "
+              >
+                <Share2 size={13} />
+                <span>Share</span>
+              </button>
+              <div className="w-[1px] h-3 bg-slate-600 mx-0.5" />
+              <button
+                onClick={() => setShowShareLinks(!showShareLinks)}
+                title="Manage active share links"
+                className={`
+                  flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors
+                  ${showShareLinks 
+                    ? 'bg-indigo-500/20 text-indigo-400' 
+                    : 'text-slate-400 hover:text-white hover:bg-slate-600'}
+                `}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {mode === 'document' && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => void handleToggleLock()}
+                disabled={isLockLoading || isLockedByOther}
+                title={isLockedByMe ? 'Click to unlock' : isLockedByOther ? 'Locked by another user' : 'Click to lock for exclusive editing'}
+                className={`
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                  disabled:opacity-40 disabled:cursor-not-allowed
+                  ${
+                    isLockedByMe
+                      ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                      : isLockedByOther
+                      ? 'bg-red-500/10 text-red-400 cursor-not-allowed'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                  }
+                `}
+              >
+                {isLockLoading
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d={isLockedByMe
+                          ? 'M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z'
+                          : 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z'}
+                      />
+                    </svg>
+                  )
+                }
+                <span>
+                  {isLockedByMe ? 'Unlock' : isLockedByOther ? 'Locked' : 'Lock'}
+                </span>
+              </button>
+
+              {isLockedByOther && userRole === 'admin' && (
+                <button
+                  onClick={() => void handleForceUnlock()}
+                  disabled={isLockLoading}
+                  title="Force unlock (Admin only)"
+                  className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m4 0v2m-2 5h.01M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H5a2 2 0 00-2 2v5a2 2 0 002 2z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+
+          {mode === 'document' && (
+            <button
+              onClick={() => setShowHistory(!showHistory)}
+              className={`
+                flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
+                ${showHistory 
+                  ? 'bg-indigo-500/20 text-indigo-400' 
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700'}
+              `}
+            >
+              <History size={14} />
+              <span>History</span>
+            </button>
+          )}
+
+          <button
           onClick={handleExport}
           disabled={isExporting || loadState !== 'connected'}
           title="Export as .docx"
@@ -325,22 +514,59 @@ export default function DocumentEditor() {
             ? <Loader2 size={14} className="animate-spin" />
             : <Download size={14} />
           }
-          <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
-        </button>
+            <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
+          </button>
+        </div>
       </header>
 
-      {/* ── Collaborative Editor ──────────────────────────────────────────── */}
-      <div className="flex-1 overflow-hidden">
-        <CollaborativeEditor
-          documentName={documentName}
-          initialContent={initialContent}
-          onReady={() => setLoadState('connected')}
-          onEditorReady={(editor) => { editorRef.current = editor }}
-          readOnly={false}
-          currentUser={user!}
-          teamId={teamId!}
-        />
+      {/* ── Main Content Area ───────────────────────────────────────────── */}
+      <div className="flex-1 overflow-hidden flex relative">
+        <div className="flex-1 overflow-hidden">
+          <CollaborativeEditor
+            documentName={documentName}
+            initialContent={initialContent}
+            onReady={() => setLoadState('connected')}
+            onEditorReady={(editor) => { editorRef.current = editor }}
+            readOnly={isLockedByOther}
+            currentUser={user!}
+            teamId={teamId!}
+          />
+        </div>
+        
+        {/* Side Panels */}
+        {showHistory && mode === 'document' && (
+          <div className="w-80 border-l border-slate-700 bg-slate-850 flex-shrink-0 animate-in slide-in-from-right duration-200">
+            <VersionHistoryPanel
+              teamId={teamId!}
+              docId={docId!}
+              onClose={() => setShowHistory(false)}
+            />
+          </div>
+        )}
+
+        {showShareLinks && mode === 'document' && (
+          <div className="w-80 border-l border-slate-700 bg-slate-850 flex-shrink-0 animate-in slide-in-from-right duration-200">
+            <DocumentShareLinksPanel
+              teamId={teamId!}
+              docId={docId!}
+              currentUserId={user!.id}
+              userRole={userRole}
+              onClose={() => setShowShareLinks(false)}
+            />
+          </div>
+        )}
       </div>
+
+      {/* ── Share Modal ───────────────────────────────────────────────────── */}
+      {isShareModalOpen && mode === 'document' && docId && (
+        <ShareLinkModal
+          itemType="document"
+          itemId={parseInt(docId, 10)}
+          teamId={parseInt(teamId!, 10)}
+          itemName={title}
+          onClose={() => setIsShareModalOpen(false)}
+        />
+      )}
     </div>
   )
 }

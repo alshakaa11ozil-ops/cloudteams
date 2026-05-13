@@ -8,8 +8,9 @@
 //              through Layout → Page → Component → SubComponent is impractical.
 //              Context is React's built-in solution for "global" state.
 
-import { createContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import type { User } from '@/types'
+import { createContext, useState, useEffect, useCallback } from 'react'
+import type { ReactNode } from 'react'
+import type { User } from '../types'
 
 // ─── 1. DEFINE WHAT THE CONTEXT HOLDS ─────────────────────────────────────
 //
@@ -124,7 +125,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     //
     // PURPOSE: Update user data in both localStorage and React state without
     //          requiring a full login (e.g. after profile update).
-    
+
     const updateUser = useCallback((newUser: User) => {
         localStorage.setItem('cloudteams_user', JSON.stringify(newUser))
         setUser(newUser)
@@ -156,7 +157,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const refreshUser = useCallback(async () => {
         try {
             // Import api lazily same pattern as logout uses
-            const { default: api } = await import('@/api/axios')
+            const { default: api } = await import('../api/axios')
             const res = await api.get<{ user: User }>('/auth/me')
             // Update the user in state — all components using useAuth() re-render
             setUser(res.data.user)

@@ -17,7 +17,7 @@ import api from './axios'
 // TYPES — mirror the backend DocumentSummary shape
 // ---------------------------------------------------------------------------
 
-import type { DocumentSummary } from '@/types'
+import type { DocumentSummary } from '../types'
 export type { DocumentSummary }
 
 // ---------------------------------------------------------------------------
@@ -160,4 +160,72 @@ export async function previewDocument(
 ): Promise<{ html: string }> {
     const res = await api.get(`/teams/${teamId}/documents/${docId}/preview`)
     return res.data
+}
+
+// ---------------------------------------------------------------------------
+// Document Versions
+// ---------------------------------------------------------------------------
+
+export interface DocumentVersion {
+    id: number
+    documentId: number
+    versionName: string | null
+    createdBy: number
+    creatorName: string | null
+    createdAt: string
+}
+
+export async function fetchDocumentVersions(teamId: string | number, docId: string | number): Promise<DocumentVersion[]> {
+    const res = await api.get(`/teams/${teamId}/documents/${docId}/versions`)
+    return res.data.versions || []
+}
+
+export async function createDocumentVersion(teamId: string | number, docId: string | number, versionName?: string): Promise<DocumentVersion> {
+    const res = await api.post(`/teams/${teamId}/documents/${docId}/versions`, { versionName })
+    return res.data
+}
+
+export async function restoreDocumentVersion(teamId: string | number, docId: string | number, versionId: number): Promise<{ success: boolean; message: string }> {
+    const res = await api.post(`/teams/${teamId}/documents/${docId}/versions/${versionId}/restore`)
+    return res.data
+}
+
+// ---------------------------------------------------------------------------
+// Document Locking
+// ---------------------------------------------------------------------------
+
+export async function lockDocument(
+    teamId: string,
+    docId: string
+): Promise<{ id: number; lockOwnerUserId: number; lockExpiresAt: string }> {
+    const res = await api.post(`/teams/${teamId}/documents/${docId}/lock`)
+    return res.data
+}
+
+export async function unlockDocument(
+    teamId: string,
+    docId: string
+): Promise<{ id: number }> {
+    const res = await api.post(`/teams/${teamId}/documents/${docId}/unlock`)
+    return res.data
+}
+
+export async function forceUnlockDocument(
+    teamId: string,
+    docId: string
+): Promise<{ success: boolean; id: number }> {
+    const res = await api.post(`/teams/${teamId}/documents/${docId}/force-unlock`)
+    return res.data
+}
+
+// ---------------------------------------------------------------------------
+// Document Share Link Management
+// ---------------------------------------------------------------------------
+
+export async function deleteDocumentShareLink(
+    teamId: string,
+    docId: string,
+    token: string
+): Promise<void> {
+    await api.delete(`/teams/${teamId}/documents/${docId}/shares/${token}`)
 }

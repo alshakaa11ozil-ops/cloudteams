@@ -113,6 +113,39 @@ export const createFolderLinkHandler = async (req: Request, res: Response): Prom
     }
 };
 
+// PURPOSE: Create a share link for a SINGLE DOCUMENT
+// INPUTS:  req.params.id = documentId, req.body.teamId = teamId
+// OUTPUTS: 201 with the created SharedLink row
+export const createDocumentLinkHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const documentId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.body.teamId as string, 10);
+
+        if (isNaN(documentId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid documentId and teamId are required' });
+            return;
+        }
+
+        const { password, expiresInHours, downloadLimit } = req.body;
+
+        const link = await createSharedLink(req.user!.userId, teamId, {
+            documentId,
+            password: password || undefined,
+            expiresInHours: expiresInHours !== undefined ? parseInt(String(expiresInHours), 10) : undefined,
+            downloadLimit: downloadLimit ? parseInt(downloadLimit, 10) : undefined
+        });
+
+        res.status(201).json({ message: 'Document share link generated', link });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[createDocumentLinkHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 // ===========================================================================
 // CONTROLLER: getMetadataHandler
 // ===========================================================================
@@ -186,6 +219,31 @@ export const downloadFileHandler = async (req: Request, res: Response): Promise<
     }
 };
 
+// ===========================================================================
+// CONTROLLER: getSharedDocumentHandler
+// ===========================================================================
+// PURPOSE: Return read-only HTML representation of a shared document
+// ===========================================================================
+import { getSharedDocumentContent } from '../services/share.service';
+export const getSharedDocumentHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const token = req.params.token as string;
+        const password = req.headers['x-share-password'] as string | undefined;
+        const requestedDocumentId = req.query.documentId ? parseInt(req.query.documentId as string, 10) : undefined;
+
+        if (!token) throw new AppError('Token is required', 400);
+
+        const content = await getSharedDocumentContent(token, password, requestedDocumentId);
+        res.status(200).json(content);
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 export const revokeLinkHandler = async (req: Request, res: Response): Promise<void> => {
     try {
         const token = req.params.token as string;
@@ -226,3 +284,59 @@ export const listFileLinksHandler = async (req: Request, res: Response): Promise
         res.status(500).json({ error: 'Internal server error' });
     }
 };
+
+// PURPOSE: List all share links for a document
+// INPUTS:  req.params.id = documentId, req.query.teamId = teamId
+// OUTPUTS: 200 with array of SharedLink rows
+export const listDocumentLinksHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const documentId = parseInt(req.params.id as string, 10);
+        const teamId = parseInt(req.query.teamId as string, 10);
+
+        if (isNaN(documentId) || isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid documentId and teamId are required' });
+            return;
+        }
+
+        const { listDocumentSharedLinks } = await import('../services/share.service');
+        const links = await listDocumentSharedLinks(req.user!.userId, teamId, documentId);
+        res.status(200).json({ links });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[listDocumentLinksHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// ===========================================================================
+// CONTROLLER: deleteShareLinkForDocHandler
+// ROUTE:   DELETE /api/teams/:teamId/documents/:docId/shares/:token
+// ACCESS:  editor (own links) | admin (any link)
+// ===========================================================================
+export const deleteShareLinkForDocHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const token = req.params.token as string;
+        const teamId = parseInt(req.params.teamId as string, 10);
+        const userId = req.user!.userId;
+
+        if (!token || isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid token and teamId are required' });
+            return;
+        }
+
+        const { revokeSharedLinkAdmin } = await import('../services/share.service');
+        await revokeSharedLinkAdmin(token, userId, teamId);
+        res.status(200).json({ message: 'Share link deleted' });
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[deleteShareLinkForDocHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+

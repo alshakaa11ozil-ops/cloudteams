@@ -1,6 +1,5 @@
-// =============================================================================
 // src/utils/hash.ts
-// PURPOSE: Calculate the SHA-256 hash of a file stored on disk.
+// PURPOSE: Calculate the SHA-256 hash of a file buffer in memory.
 //          Used by the upload service to fingerprint every uploaded file
 //          before checking for duplicates in the database.
 //
@@ -13,77 +12,41 @@
 //            for content-addressable storage (Git uses SHA-1 internally but
 //            is migrating to SHA-256 for exactly this reason).
 //
-// WHY STREAMING (not fs.readFileSync)?
-//   readFileSync loads the ENTIRE file into RAM before processing.
-//   A 50MB upload = 50MB of RAM consumed during hashing.
-//   The stream approach reads in small chunks (~64KB each), feeds each chunk
-//   to the hash function, then discards it. RAM usage stays near zero.
-//   This matters when handling multiple concurrent uploads.
-// =============================================================================
+// WHY BUFFER (not streaming from disk)?
+//   Previously we streamed from disk to avoid loading large files into RAM.
+//   With Multer memoryStorage, the file is ALREADY in RAM as a Buffer —
+//   it was never written to disk at all. Streaming from disk would require
+//   a path that doesn't exist. Since the buffer is already in memory,
+//   we hash it synchronously in one pass — no I/O, no Promise needed.
+//   Memory cost is the same either way: the buffer already exists.
 
-import crypto from "crypto"; // Node.js built-in — no npm install needed
-import fs from "fs"; // Node.js built-in file system module
+import crypto from 'crypto'; // Node.js built-in — no npm install needed
 
 // ---------------------------------------------------------------------------
 // calculateFileHash
 // ---------------------------------------------------------------------------
-// PURPOSE: Read a file from disk in streaming chunks and compute its SHA-256
-//          hash, returning the result as a 64-character hex string.
+// PURPOSE: Compute SHA-256 hash of a file buffer already in memory.
 //
 // INPUTS:
-//   filePath (string) — absolute or relative path to the file on disk.
-//                       Example: "uploads/1710000000000-report.pdf"
+//   buffer (Buffer) — the raw file bytes from multerFile.buffer
 //
 // OUTPUTS:
-//   Promise<string>   — resolves to a 64-character hex string.
-//                       Example: "a3f5c2d1e8b4...64 hex chars total"
-//                       Rejects with an Error if the file cannot be read.
+//   string — 64-character hex string
+//   Example: "a3f5c2d1e8b4...64 hex chars total"
 //
-// WHY A PROMISE?
-//   File I/O in Node.js is asynchronous. Wrapping in a Promise lets the caller
-//   use `await calculateFileHash(path)` without blocking the event loop.
-//   If we used synchronous I/O, no other requests could be handled while
-//   hashing a large file — the server would freeze.
-//
-// WHY THIS APPROACH vs crypto.createHash + readFileSync?
-//   The streaming approach handles files of any size with constant memory use.
-//   readFileSync would load the whole file into a Buffer first — fine for
-//   small files, dangerous for 50MB uploads under concurrent load.
+// WHY SYNCHRONOUS (not Promise)?
+//   The original async version was needed because disk I/O is async.
+//   Buffer hashing is pure CPU computation — no I/O, no waiting.
+//   Synchronous is correct here. Wrapping in a Promise would add
+//   overhead with zero benefit.
 // ---------------------------------------------------------------------------
-export const calculateFileHash = (filePath: string): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        // crypto.createHash('sha256') creates a Hash object.
-        // Think of it as a blender: you feed it chunks of data,
-        // and at the end you press "blend" to get the final digest.
-        const hash = crypto.createHash("sha256");
-
-        // fs.createReadStream opens the file and reads it in chunks.
-        // Default chunk (highWaterMark) size is 64KB.
-        // The stream emits events: 'data' (chunk ready), 'end' (done), 'error'.
-        const stream = fs.createReadStream(filePath);
-
-        // 'data' event fires for each chunk read from disk.
-        // hash.update(chunk) feeds that chunk into the SHA-256 computation.
-        // The hash function maintains internal state between updates —
-        // you can call update() as many times as you like.
-        stream.on("data", (chunk: Buffer) => {
-            hash.update(chunk); // feed this chunk into the ongoing hash computation
-        });
-
-        // 'end' event fires when the entire file has been read.
-        // hash.digest('hex') finalises the computation and returns the result
-        // as a lowercase hex string (64 characters for SHA-256).
-        // 'hex' means each byte of the 32-byte hash is represented as 2 hex chars.
-        // Alternative: 'base64' (shorter but less conventional for file hashing).
-        stream.on("end", () => {
-            const hexHash = hash.digest("hex"); // finalise → 64-char hex string
-            resolve(hexHash);
-        });
-
-        // 'error' event fires if the file doesn't exist, permissions are wrong, etc.
-        // We reject the Promise so the caller can handle it with try/catch.
-        stream.on("error", (err: Error) => {
-            reject(err);
-        });
-    });
-};
+export function calculateFileHash(buffer: Buffer): string {
+    // crypto.createHash('sha256') creates a Hash object.
+    // .update(buffer) feeds ALL bytes in one call — no chunking needed
+    // because the buffer is already fully in RAM.
+    // .digest('hex') finalises and returns the 64-char hex string.
+    return crypto
+        .createHash('sha256')
+        .update(buffer)
+        .digest('hex');
+}

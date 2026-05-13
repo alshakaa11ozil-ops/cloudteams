@@ -13,7 +13,7 @@
 //   onClose       — callback to dismiss modal
 
 import { useState } from 'react'
-import type { FolderWithBreadcrumb } from '@/types'
+import type { FolderWithBreadcrumb } from '../types'
 import FolderTree from './FolderTree'
 
 interface MoveModalProps {
@@ -45,7 +45,7 @@ export default function MoveModal({
   const isValidTarget = (targetId: number | null) => {
     // Cannot move to its own current location
     if (targetId === currentParentId) return true // It's valid to select, but "Move" button will be disabled
-    
+
     // If moving a file or document, any folder is valid
     if (itemType === 'file' || itemType === 'document') return true
 
@@ -68,17 +68,17 @@ export default function MoveModal({
   // Filter the folders BEFORE passing them to FolderTree so invalid targets don't even render
   // (We actually render them but maybe disable selection. Wait, our FolderTree takes a flat list
   // and builds a tree. If we filter out the folder itself, its children also vanish. This is perfect!)
-  const filteredFolders = itemType === 'folder' 
+  const filteredFolders = itemType === 'folder'
     ? folders.filter(f => {
-        // Exclude the folder being moved and all its descendants
-        let current: any = f
-        while (current) {
-          if (current.id === itemId) return false
-          if (current.parent_folder_id === null) break
-          current = folders.find((parent) => parent.id === current.parent_folder_id)
-        }
-        return true
-      })
+      // Exclude the folder being moved and all its descendants
+      let current: any = f
+      while (current) {
+        if (current.id === itemId) return false
+        if (current.parent_folder_id === null) break
+        current = folders.find((parent) => parent.id === current.parent_folder_id)
+      }
+      return true
+    })
     : folders
 
   const canMove = selectedTargetId !== currentParentId && isValidTarget(selectedTargetId)
@@ -103,18 +103,18 @@ export default function MoveModal({
             Select Destination
           </p>
           <div className="border border-gray-200 rounded-lg overflow-hidden pb-2 mx-2">
-             {/* We use FolderTree but override the onFolderClick to select, not navigate.
+            {/* We use FolderTree but override the onFolderClick to select, not navigate.
                  We also pass dummy functions for actions since we don't want action buttons here. */}
-             <FolderTree
-               folders={filteredFolders}
-               activeFolderId={selectedTargetId}
-               onFolderClick={(id) => {
-                 if (isValidTarget(id)) setSelectedTargetId(id)
-               }}
-               onDeleteFolder={() => {}} // No-op in picker mode
-               onRenameFolder={() => {}} // No-op in picker mode
-               onMoveFolderRequest={() => {}} // No-op in picker mode
-             />
+            <FolderTree
+              folders={filteredFolders}
+              activeFolderId={selectedTargetId}
+              onFolderClick={(id) => {
+                if (isValidTarget(id)) setSelectedTargetId(id)
+              }}
+              onDeleteFolder={() => { }} // No-op in picker mode
+              onRenameFolder={() => { }} // No-op in picker mode
+              onMoveFolderRequest={() => { }} // No-op in picker mode
+            />
           </div>
         </div>
 
