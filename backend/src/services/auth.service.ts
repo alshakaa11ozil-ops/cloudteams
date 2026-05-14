@@ -96,15 +96,25 @@ export const registerUser = async (input: RegisterInput): Promise<AuthResult> =>
   // ── Step 3: Create user in database ───────────────────────
   // WHY LOWERCASE EMAIL: Prevents duplicate accounts from
   //   "Alice@email.com" vs "alice@email.com"
-  const user = await prisma.user.create({
-    data: {
-      username: input.name.trim(),
-      email: input.email.toLowerCase().trim(),
-      password_hash: passwordHash,
-      two_factor_secret: twoFactorSecret.base32,
-      two_factor_confirmed: false, // Mandatory setup pending
-    },
-  })
+  let user;
+  try {
+    user = await prisma.user.create({
+      data: {
+        username: input.name.trim(),
+        email: input.email.toLowerCase().trim(),
+        password_hash: passwordHash,
+        two_factor_secret: twoFactorSecret.base32,
+        two_factor_confirmed: false, // Mandatory setup pending
+      },
+    })
+  } catch (err: any) {
+    // P2002 = unique constraint violation (username or email already taken)
+    if (err.code === 'P2002') {
+      throw new AppError('Username or email already taken', 400);
+    }
+    throw err;
+  }
+
 
   // ── Step 4: Sign temp token for 2FA setup ─────────────────
   // WHY TEMP TOKEN: We don't want to grant full access until 2FA is verified.
