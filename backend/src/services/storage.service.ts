@@ -77,7 +77,8 @@ export async function getFileStream(key: string): Promise<Readable> {
     // response.Body is a ReadableStream (Web Streams API).
     // Node.js http.ServerResponse needs a Node.js Readable stream.
     // Readable.fromWeb() converts between the two.
-    return Readable.fromWeb(response.Body as any);
+    const bytes = await response.Body.transformToByteArray();
+    return Readable.from(Buffer.from(bytes));  // ← from() not fromWeb()
 }
 
 /**
