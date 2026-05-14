@@ -63,7 +63,26 @@ const app = express()
 app.use(helmet())
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, health checks)
+    if (!origin) return callback(null, true);
+
+    const allowed = [
+      process.env.FRONTEND_URL,          // https://cloudteams.vercel.app
+      'http://localhost:5173',            // local dev
+      'http://localhost:3000',            // alternative local
+    ].filter(Boolean) as string[];
+
+    // Also allow ANY vercel.app preview URL for this project
+    const isVercelPreview = origin.endsWith('.vercel.app');
+
+    if (allowed.includes(origin) || isVercelPreview) {
+      callback(null, true);
+    } else {
+      console.warn(`[CORS] Blocked origin: ${origin}`);
+      callback(new Error(`CORS blocked: ${origin}`));
+    }
+  },
   credentials: true,
 }))
 
