@@ -40,6 +40,8 @@ import type { AxiosError } from 'axios'
 import axios from 'axios'
 import { useAuth } from '../hooks/useAuth'
 import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
+import { exportToDocx } from '../utils/exportDocx'
+
 import VersionHistoryPanel from '../components/editor/VersionHistoryPanel'
 import ShareLinkModal from '../components/ShareLinkModal'
 import DocumentShareLinksPanel from '../components/editor/DocumentShareLinksPanel'

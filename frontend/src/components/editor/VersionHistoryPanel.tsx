@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { History, X, Clock, Loader2, RotateCcw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
-import { fetchDocumentVersions, createDocumentVersion, restoreDocumentVersion, DocumentVersion } from '../../api/documents'
+import { fetchDocumentVersions, createDocumentVersion, restoreDocumentVersion } from '../../api/documents'
+import type { DocumentVersion } from '../../api/documents'
 
 interface VersionHistoryPanelProps {
   teamId: string
