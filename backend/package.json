@@ -7,7 +7,7 @@
     "postinstall": "prisma generate",
     "dev": "nodemon --exec ts-node src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "npx prisma migrate deploy && node dist/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",

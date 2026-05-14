@@ -55,7 +55,11 @@ import documentRoutes from './routes/documentRoutes'
 dotenv.config()
 
 const app = express()
+// WHY trust proxy: Railway sits behind a load balancer that sets
+// X-Forwarded-For. Without this, express-rate-limit throws an error
+// because it can't trust the IP header. '1' means trust one proxy hop.
 
+app.set('trust proxy', 1)
 // ============================================================
 // SECURITY MIDDLEWARE
 // ============================================================
