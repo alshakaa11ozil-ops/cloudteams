@@ -553,18 +553,6 @@ export async function downloadFileService(fileId: number, userId: number) {
     // ─── NEW: Decryption support for downloads ──────────────────────────────
     // If the file is encrypted, we must decrypt it before sending to the user.
     // Since our GCM implementation has the tag at the start, we buffer and decrypt.
-    if (file.encryption_iv && isEncryptionEnabled()) {
-        const chunks: any[] = [];
-        for await (const chunk of stream) {
-            chunks.push(chunk);
-        }
-        const encryptedBuffer = Buffer.concat(chunks);
-        const decryptedBuffer = decryptBuffer(encryptedBuffer, file.encryption_iv);
-
-        // Convert the decrypted buffer back into a stream for the controller
-        const decryptedStream = Readable.from(decryptedBuffer);
-        return { stream: decryptedStream, file };
-    }
 
     return { stream, file };
 }
