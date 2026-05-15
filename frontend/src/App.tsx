@@ -19,6 +19,7 @@ import ActivityFeed from './pages/ActivityFeed'
 import AnalyticsDashboard from './pages/AnalyticsDashboard'
 import RecycleBin from './pages/RecycleBin'
 import PublicSharePage from './pages/share/PublicSharePage'
+import SharingPage from './pages/SharingPage'
 import TeamSettings from './pages/TeamSettings'
 import UserSettings from './pages/UserSettings'
 // Day 2: Collaborative editor — handles both file editing and native documents
@@ -106,6 +107,7 @@ export default function App() {
             <Route path="/teams/:id/activity" element={<ActivityFeed />} />
             <Route path="/teams/:id/analytics" element={<AnalyticsDashboard />} />
             <Route path="/teams/:id/recycle-bin" element={<RecycleBin />} />
+            <Route path="/teams/:id/sharing" element={<SharingPage />} />
 
             {/* Week 14 — Settings & Share (routes added later this week) */}
             <Route path="/teams/:id/settings" element={<TeamSettings />} />

@@ -576,3 +576,32 @@ export async function revokeSharedLinkAdmin(token: string, userId: number, teamI
 
     emitToTeam(link.team_id, SOCKET_EVENTS.LINK_REVOKED, { linkId: link.id, revokedBy: userId });
 }
+
+// ===========================================================================
+// SERVICE FUNCTION: listTeamShareLinks
+// ===========================================================================
+// PURPOSE: Return all share links for a team, filtered by the caller's role.
+//   - Admin  → sees every link in the team
+//   - Editor → sees only links they created
+//   - Viewer → blocked (403)
+// ===========================================================================
+export async function listTeamShareLinks(userId: number, teamId: number) {
+    const membership = await assertTeamMember(userId, teamId, 'editor');
+
+    const where = membership.role === 'admin'
+        ? { team_id: teamId }
+        : { team_id: teamId, created_by: userId };
+
+    const links = await prisma.sharedLink.findMany({
+        where,
+        include: {
+            files:     { select: { id: true, original_name: true, mime_type: true } },
+            folders:   { select: { id: true, name: true } },
+            documents: { select: { id: true, title: true } },
+            creator:   { select: { id: true, username: true, full_name: true } },
+        },
+        orderBy: { created_at: 'desc' },
+    });
+
+    return links;
+}

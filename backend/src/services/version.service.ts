@@ -13,7 +13,9 @@ import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity } from '../utils/activityLogger';
 
 // Internal helper — snapshot current file state into file_versions table
-// Called BEFORE any overwrite so we never lose a version
+// Called BEFORE any overwrite so we never lose a version.
+// IDEMPOTENT: if a version already exists at the calculated version_number,
+// returns it silently without creating a duplicate.
 export const createVersion = async (
     fileId: number,
     tx: Omit<Prisma.TransactionClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'> = prisma
@@ -22,11 +24,18 @@ export const createVersion = async (
     if (!file) throw new Error('File not found during version creation');
 
     const versionCount = await tx.fileVersion.count({ where: { file_id: fileId } });
+    const nextVersionNumber = versionCount + 1;
+
+    // Dedup guard: never create a duplicate version at the same number
+    const alreadyExists = await tx.fileVersion.findFirst({
+        where: { file_id: fileId, version_number: nextVersionNumber }
+    });
+    if (alreadyExists) return alreadyExists;
 
     return tx.fileVersion.create({
         data: {
             file_id: file.id,
-            version_number: versionCount + 1,
+            version_number: nextVersionNumber,
             storage_path: file.storage_path,
             file_size: file.file_size,
             uploaded_by: file.uploaded_by,

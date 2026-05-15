@@ -361,3 +361,30 @@ export const deleteShareLinkForDocHandler = async (req: Request, res: Response):
     }
 };
 
+// ===========================================================================
+// CONTROLLER: listTeamShareLinksHandler
+// ROUTE:   GET /api/teams/:teamId/share-links
+// ACCESS:  admin (all links) | editor (own links)
+// ===========================================================================
+export const listTeamShareLinksHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const teamId = parseInt((req.params.teamId || req.params.id) as string, 10);
+        const userId = req.user!.userId;
+
+        if (isNaN(teamId)) {
+            res.status(400).json({ error: 'Valid teamId is required' });
+            return;
+        }
+
+        const { listTeamShareLinks } = await import('../services/share.service');
+        const links = await listTeamShareLinks(userId, teamId);
+        res.status(200).json(links);
+    } catch (error) {
+        if (error instanceof AppError) {
+            res.status(error.statusCode).json({ error: error.message });
+            return;
+        }
+        console.error('[listTeamShareLinksHandler]', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};

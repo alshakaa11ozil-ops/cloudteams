@@ -133,8 +133,11 @@ export default function VersionHistoryPanel({ teamId, docId, onClose }: VersionH
         ) : versions.length === 0 ? (
           <div className="text-center p-8 text-slate-500 text-sm">
             <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p>No versions saved yet.</p>
-            <p className="mt-1 text-xs">Auto-snapshots are created every 30 minutes of editing.</p>
+            <p className="font-medium text-slate-400">No versions yet.</p>
+            <p className="mt-2 text-xs leading-relaxed">
+              Version 1 will be created automatically the first time you start typing in this document.
+              Use <span className="text-indigo-400 font-medium">Save Current State</span> above to save additional snapshots at any time.
+            </p>
           </div>
         ) : (
           <div className="space-y-3">

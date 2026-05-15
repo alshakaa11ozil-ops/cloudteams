@@ -16,6 +16,11 @@ export interface SharedLink {
     download_limit: number | null
     downloads_count: number
     created_at: string
+    // Populated relations for team-wide sharing view
+    files?: { id: number; original_name: string; mime_type: string } | null
+    folders?: { id: number; name: string } | null
+    documents?: { id: number; title: string } | null
+    creator?: { id: number; username: string; full_name: string | null } | null
 }
 
 export interface ShareMetadata {
@@ -78,6 +83,12 @@ export async function fetchDocumentShares(documentId: number, teamId: number): P
         params: { teamId }
     })
     return response.data.links
+}
+
+// Fetch all active share links for the entire team
+export async function fetchTeamShareLinks(teamId: number): Promise<SharedLink[]> {
+    const response = await api.get<SharedLink[]>(`/teams/${teamId}/share-links`)
+    return response.data
 }
 
 // Revoke a share link

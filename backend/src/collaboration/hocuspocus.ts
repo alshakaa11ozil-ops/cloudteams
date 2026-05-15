@@ -326,6 +326,13 @@ const collabServer = new Hocuspocus({
 
                 try {
                     if (type === 'doc') {
+                        // Check the PREVIOUS state before overwriting —
+                        // so we can detect the very first real write.
+                        const prevDoc = await prisma.documents.findFirst({
+                            where: { id, is_deleted: false },
+                            select: { yjs_state: true, created_by: true }
+                        })
+
                         const result = await prisma.documents.updateMany({
                             where: { id, is_deleted: false },
                             data: {
@@ -338,28 +345,25 @@ const collabServer = new Hocuspocus({
                         } else {
                             console.log(`[Hocuspocus] ✅ store() saved doc ${id}\n`)
 
-                            // AUTO-SNAPSHOT: Create a version every 30 minutes
-                            const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000)
-                            const recentSnapshot = await prisma.documentVersion.findFirst({
-                                where: { document_id: id, created_at: { gt: thirtyMinsAgo } },
-                                select: { id: true }
-                            })
-
-                            if (!recentSnapshot) {
-                                const docInfo = await prisma.documents.findUnique({
-                                    where: { id },
-                                    select: { created_by: true }
+                            // ── v1 SNAPSHOT: first time this document gets real content ──
+                            // We only auto-create ONE version — on the very first write.
+                            // All subsequent snapshots are done manually via "Save Snapshot".
+                            const wasBlank = !prevDoc?.yjs_state
+                            if (wasBlank && prevDoc) {
+                                const existingV1 = await prisma.documentVersion.findFirst({
+                                    where: { document_id: id },
+                                    select: { id: true }
                                 })
-                                if (docInfo) {
+                                if (!existingV1) {
                                     await prisma.documentVersion.create({
                                         data: {
                                             document_id: id,
-                                            created_by: docInfo.created_by,
-                                            version_name: 'Auto-save',
+                                            created_by: prevDoc.created_by,
+                                            version_name: 'Initial version',
                                             yjs_state: buffer,
                                         }
                                     })
-                                    console.log(`[Hocuspocus] ✅ store() created auto-snapshot for doc ${id}`)
+                                    console.log(`[Hocuspocus] ✅ store() created v1 snapshot for doc ${id}`)
                                 }
                             }
                         }

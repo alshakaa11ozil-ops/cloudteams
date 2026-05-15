@@ -40,6 +40,10 @@ router.use('/:id/activity', activityRouter);
 // Analytics dashboard: GET /api/teams/:id/analytics
 router.use('/:id/analytics', analyticsRouter);
 
+// Share links for the team
+import { listTeamShareLinksHandler } from '../controllers/share.controller';
+router.get('/:id/share-links', authenticate, requireRole('editor'), listTeamShareLinksHandler);
+
 // Add this line before export default router:
 // Mounts version routes at /api/teams/:teamId/files/:fileId/versions
 // WHY use here not in fileRoutes: version routes are scoped to a team context
