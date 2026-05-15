@@ -8,6 +8,10 @@ COPY prisma ./prisma/
 RUN npm ci
 RUN npx prisma generate
 
+
+
+ARG CACHEBUST=2
+
 COPY . .
 RUN npm run build
 
