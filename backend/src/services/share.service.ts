@@ -1,8 +1,6 @@
 // src/services/share.service.ts
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import path from 'path';
-import fs from 'fs';
 import prisma from '../config/database';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity, ActivityTargetType } from '../utils/activityLogger';
@@ -359,10 +357,7 @@ export async function downloadSharedFile(token: string, password?: string, reque
 
     if (targetFile.is_deleted) throw new AppError('File has been deleted', 404);
 
-    const absolutePath = path.resolve(targetFile.storage_path);
-    if (!fs.existsSync(absolutePath)) {
-        throw new AppError('File is missing from disk storage', 404);
-    }
+
 
     // ✅ Atomic increment — only succeeds if still under limit
     // Do this AFTER validating the file so failed downloads don't waste a token.
@@ -378,10 +373,12 @@ export async function downloadSharedFile(token: string, password?: string, reque
     }
 
     return {
-        absolutePath,
+        storagePath: targetFile.storage_path,  // R2 object key
         originalName: targetFile.original_name,
-        mimeType: targetFile.mime_type
+        mimeType: targetFile.mime_type,
+        encryptionIv: (targetFile as any).encryption_iv as string | null,
     };
+
 }
 
 // ===========================================================================
@@ -532,7 +529,7 @@ export async function getSharedDocumentContent(token: string, password?: string,
 
     const yjsState = targetDoc.yjs_state as Buffer | null;
     let html = '<p><em>This document is empty.</em></p>';
-    
+
     if (yjsState && yjsState.length >= 20) {
         html = extractHtmlFromYjsState(yjsState);
     }

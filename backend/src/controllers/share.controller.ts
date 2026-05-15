@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { createSharedLink, getLinkMetadata, getTeamContent, downloadSharedFile, revokeSharedLink, listFileSharedLinks } from '../services/share.service';
 import { AppError } from '../utils/teamGuard';
+import { getFileStream } from '../services/storage.service';
+import { decryptBuffer, isEncryptionEnabled } from '../utils/fileEncryption';
 
 // ===========================================================================
 // CONTROLLER: createLinkHandler
@@ -205,16 +207,35 @@ export const downloadFileHandler = async (req: Request, res: Response): Promise<
 
         if (!token) throw new AppError('Token is required', 400);
 
-        const { absolutePath, originalName } = await downloadSharedFile(token, password, requestedFileId);
+        // downloadSharedFile now returns R2 storage key, not a disk path
+        const result = await downloadSharedFile(token, password, requestedFileId);
 
-        res.download(absolutePath, originalName, (err) => {
-            if (err) console.error("[downloadFileHandler] Stream error:", err);
-        });
+        // Fetch from R2
+        const stream = await getFileStream(result.storagePath);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+            chunks.push(Buffer.from(chunk));
+        }
+        let fileBuffer: Buffer = Buffer.concat(chunks) as Buffer;
+
+        // Decrypt if the file was encrypted at upload time
+        const encryptionIv = (result as any).encryptionIv as string | null;
+        if (encryptionIv && isEncryptionEnabled()) {
+            fileBuffer = decryptBuffer(fileBuffer, encryptionIv);
+        }
+
+
+        res.setHeader('Content-Disposition', `attachment; filename="${result.originalName}"`);
+        res.setHeader('Content-Type', result.mimeType ?? 'application/octet-stream');
+        res.setHeader('Content-Length', fileBuffer.length.toString());
+        res.end(fileBuffer);
+
     } catch (error) {
         if (error instanceof AppError) {
             res.status(error.statusCode).json({ error: error.message });
             return;
         }
+        console.error('[downloadFileHandler] Unexpected error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
