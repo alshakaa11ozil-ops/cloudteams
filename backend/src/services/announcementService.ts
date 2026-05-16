@@ -62,7 +62,7 @@ export async function createAnnouncement(
     action: 'announcement_posted',
     targetType: 'team',
     targetId: teamId,
-    metadata: { announcementId: announcement.id, title: announcement.title }
+    metadata: { announcementId: announcement.id, announcement_title: announcement.title }
   });
 
   // Real-time notification via helper
@@ -187,7 +187,11 @@ export async function updateAnnouncement(
       action: 'announcement_pinned',
       targetType: 'team',
       targetId: teamId,
-      metadata: { announcementId: announcementId, isPinned: updates.isPinned }
+      metadata: { 
+        announcementId: announcementId, 
+        isPinned: updates.isPinned,
+        announcement_title: announcement.title
+      }
     });
 
     // Real-time notification via helper

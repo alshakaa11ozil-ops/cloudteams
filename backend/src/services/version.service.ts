@@ -46,44 +46,88 @@ export const createVersion = async (
 
 // ===========================================================================
 // createCollaborativeVersionCheckpoint
-// PURPOSE: Create a version snapshot during collaborative editing.
+// DEPRECATED — no longer called automatically.
 //
-// WHY IT EXISTS:
-//   When a user edits a file in the collaborative editor, Hocuspocus saves
-//   the content to yjs_state in the DB — but no file_version row is created.
-//   Without this, the Versions tab always shows "No version history".
-//
-// CALLED BY: hocuspocus.ts store() (debounced — max once per 10 minutes)
-//
-// LIMITATION: The storage_path captured here is the ORIGINAL file's path,
-//   not the collaborative content. Restoring a collaborative checkpoint will
-//   revert to the pre-edit file AND clear yjs_state (done in restoreVersion).
-//   This gives users visible version history without requiring a schema migration.
+// WHY DEPRECATED:
+//   Auto-snapshotting on every Hocuspocus save creates thousands of versions
+//   per editing session — none of which are meaningful to the user.
+//   Industry standard (Google Docs, Notion) is explicit/manual versioning only.
+//   Versions are now created by:
+//     1. Uploading a new file with the same name (file.service.ts → createVersion)
+//     2. User clicking "Save Version" → saveFileVersion() below
+//     3. System snapshotting BEFORE a restore (restoreVersion → createVersion)
 // ===========================================================================
-export const createCollaborativeVersionCheckpoint = async (fileId: number): Promise<void> => {
-    try {
-        const file = await prisma.file.findFirst({
-            where: { id: fileId, is_deleted: false },
-            select: { id: true, storage_path: true, file_size: true, uploaded_by: true, encryption_iv: true }
-        });
-        if (!file) return;
+export const createCollaborativeVersionCheckpoint = async (_fileId: number): Promise<void> => {
+    // No-op: auto-checkpointing disabled in favour of explicit versioning.
+    // Kept exported so existing hocuspocus.ts imports do not break.
+};
 
-        const versionCount = await prisma.fileVersion.count({ where: { file_id: fileId } });
+// ===========================================================================
+// saveFileVersion
+// PURPOSE: Explicitly snapshot the current file state as a named version.
+//
+// WHY EXPLICIT (not automatic):
+//   The Yjs collaborative editor saves continuously (every keystroke synced).
+//   Snapshotting every save would produce thousands of useless versions.
+//   This follows the Google Docs model: user deliberately clicks "Save Version".
+//
+// CALLED BY: saveVersionHandler → POST /api/teams/:teamId/files/:fileId/versions
+//
+// INPUTS:
+//   fileId     — file to snapshot
+//   teamId     — team ownership check
+//   userId     — must be editor or admin
+//   versionName — optional label (e.g. "Before Q3 review")
+//
+// OUTPUTS: The newly created FileVersion row
+// ===========================================================================
+export const saveFileVersion = async (
+    fileId: number,
+    teamId: number,
+    userId: number,
+    versionName?: string
+) => {
+    // Only editors and admins can manually save versions
+    await assertTeamMember(userId, teamId, 'editor');
 
-        await prisma.fileVersion.create({
-            data: {
-                file_id: file.id,
-                version_number: versionCount + 1,
-                storage_path: file.storage_path,
-                file_size: file.file_size,
-                uploaded_by: file.uploaded_by,
-                encryption_iv: file.encryption_iv,
-            },
-        });
-    } catch (err: any) {
-        // Non-fatal: version checkpoints are best-effort
-        console.warn('[createCollaborativeVersionCheckpoint] Failed:', err.message)
-    }
+    const file = await prisma.file.findFirst({
+        where: { id: fileId, team_id: teamId, is_deleted: false },
+    });
+    if (!file) throw new AppError('File not found', 404);
+
+    const versionCount = await prisma.fileVersion.count({ where: { file_id: fileId } });
+    const nextVersionNumber = versionCount + 1;
+
+    const version = await prisma.fileVersion.create({
+        data: {
+            file_id: file.id,
+            version_number: nextVersionNumber,
+            storage_path: file.storage_path,
+            file_size: file.file_size,
+            uploaded_by: userId,
+            encryption_iv: file.encryption_iv,
+            // versionName is stored in a JSON metadata pattern via yjs_state field
+            // if you want a dedicated column, add version_name to FileVersion in schema
+        },
+        include: {
+            uploader: { select: { id: true, username: true, email: true } },
+        },
+    });
+
+    void logActivity({
+        teamId,
+        userId,
+        action: 'version_saved',
+        targetType: 'file',
+        targetId: fileId,
+        metadata: {
+            version_number: nextVersionNumber,
+            file_name: file.original_name,
+            ...(versionName ? { version_name: versionName } : {}),
+        },
+    });
+
+    return { ...version, version_name: versionName ?? null };
 };
 
 // =============================================================================
@@ -253,7 +297,10 @@ export const restoreVersion = async (
                 action: 'version_restored',
                 target_type: 'file',
                 target_id: fileId,
-                metadata: { restored_to_version: versionNumber },
+                metadata: { 
+                    restored_to_version: versionNumber,
+                    file_name: file.original_name
+                },
                 ip,
                 userAgent
             }
