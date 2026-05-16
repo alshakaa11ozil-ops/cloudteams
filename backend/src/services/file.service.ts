@@ -822,11 +822,11 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
     }
 
     if (node instanceof Y.XmlFragment) {
-        return Array.from(node as unknown as Iterable<any>)
-            .filter(Boolean)
-            .map((c: any) => yjsNodeToHtml(c)).join('')
-
-
+        // Use .toArray() — XmlFragment is not always directly iterable in all Yjs versions
+        const children = typeof (node as any).toArray === 'function'
+            ? (node as any).toArray() as any[]
+            : Array.from(node as unknown as Iterable<any>)
+        return children.filter(Boolean).map((c: any) => yjsNodeToHtml(c)).join('')
     }
 
 
@@ -861,9 +861,27 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
 export function extractHtmlFromYjsState(yjsState: Buffer): string {
     try {
         const ydoc = new Y.Doc()
-        Y.applyUpdate(ydoc, new Uint8Array(yjsState))
-        const xmlFragment = ydoc.getXmlFragment('default')
-        const html = yjsNodeToHtml(xmlFragment)
+        const bytes = new Uint8Array(yjsState)
+
+        // Hocuspocus may store state in V1 or V2 update format depending on version.
+        // Try V1 first; if it throws, fall back to V2.
+        try {
+            Y.applyUpdate(ydoc, bytes)
+        } catch {
+            try {
+                Y.applyUpdateV2(ydoc, bytes)
+            } catch (e2: any) {
+                throw new Error(`Could not apply Yjs update (V1 or V2): ${e2.message}`)
+            }
+        }
+
+        // TipTap Collaboration stores content under the 'default' XmlFragment.
+        // Try 'prosemirror' as a fallback for older integrations.
+        let html = yjsNodeToHtml(ydoc.getXmlFragment('default'))
+        if (!html) {
+            html = yjsNodeToHtml(ydoc.getXmlFragment('prosemirror'))
+        }
+
         ydoc.destroy()
         return html || '<p><em>This document is empty.</em></p>'
     } catch (err: any) {
@@ -923,7 +941,16 @@ export const getFilePreview = async (
     )
     if (file.yjs_state && (file.yjs_state as Buffer).length > 20 && isCollaborativeType) {
         const html = extractHtmlFromYjsState(file.yjs_state as Buffer)
-        return { previewable: true, type: 'html', content: html }
+        // Only use Yjs HTML if it produced actual content.
+        // If extraction silently failed (empty doc placeholder), fall through to
+        // the regular disk/R2 preview so the original uploaded content is shown.
+        const isPlaceholder =
+            html === '<p><em>This document is empty.</em></p>' ||
+            html === '<p><em>Preview could not be generated from this document.</em></p>'
+        if (!isPlaceholder) {
+            return { previewable: true, type: 'html', content: html }
+        }
+        // Fall through to disk/R2 preview below
     }
 
     // ─── NEW DECRYPTION LOGIC ────────────────────────────────────────────────

@@ -65,7 +65,9 @@ export default function PublicSharePage() {
     const { data: sharedContent, isLoading: isContentLoading } = useQuery({
         queryKey: ['shareContent', token, isPasswordVerified, currentFolderId],
         queryFn: () => getSharedTeamContent(token!, password || undefined, currentFolderId),
-        enabled: !!token && !!metadata && metadata.type !== 'file' && hasAccess,
+        // Only fires for folder/team shares — NOT for file or document shares.
+        // Document tokens are rejected by getTeamContent with 404, causing a spurious error.
+        enabled: !!token && !!metadata && metadata.type !== 'file' && metadata.type !== 'document' && hasAccess,
         retry: false
     })
 
@@ -89,6 +91,36 @@ export default function PublicSharePage() {
         setBreadcrumbs(prev => prev.slice(0, index + 1))
         setPreviewBlob(null)
         setDocumentPreview(null)
+    }
+
+    // ── Password verification for folder/team/document shares ─────────────────
+    // WHY separate from handleDownload: downloading with no fileId causes the backend
+    // to throw "Missing file selection". For non-file shares we just need to verify
+    // the password by pinging the content endpoint with it.
+    const handleVerifyPassword = async (e: React.FormEvent) => {
+        e.preventDefault()
+        if (!password) { toast.error('Password is required'); return }
+        setIsDownloading('main')
+        try {
+            if (metadata?.type === 'document') {
+                // For document shares, verify + pre-load content in one call
+                const content = await getSharedDocumentContent(token!, password)
+                setDocumentPreview(content)
+            } else {
+                // For folder/team shares, just probe with password — throws 401 if wrong
+                await getSharedTeamContent(token!, password, null)
+            }
+            setIsPasswordVerified(true)
+        } catch (err: any) {
+            const status = err.response?.status
+            if (status === 401) {
+                toast.error('Incorrect password. Please try again.')
+            } else {
+                toast.error(err.response?.data?.error || 'Failed to verify password.')
+            }
+        } finally {
+            setIsDownloading(false)
+        }
     }
 
     const handleDownload = async (e?: React.FormEvent, fileId?: number) => {
@@ -213,7 +245,16 @@ export default function PublicSharePage() {
                         </div>
                         <h2 className="text-xl font-bold text-white">Protected Link</h2>
                     </div>
-                    <form onSubmit={(e) => void handleDownload(e)} className="p-6">
+                    <form
+                        onSubmit={(e) =>
+                            // File shares: download immediately verifies the password.
+                            // Folder/team/document shares: verify only — no file to download.
+                            metadata?.type === 'file'
+                                ? void handleDownload(e)
+                                : void handleVerifyPassword(e)
+                        }
+                        className="p-6"
+                    >
                         <p className="text-sm text-gray-500 mb-5 text-center">
                             This link is password protected. Enter the password to continue.
                         </p>
@@ -298,6 +339,21 @@ export default function PublicSharePage() {
 
     // ── Single document share ────────────────────────────────────────────────
     if (metadata.type === 'document') {
+        // Helper: export document as an HTML file
+        const handleExport = () => {
+            if (!documentPreview) return
+            const blob = new Blob(
+                [`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${documentPreview.title}</title><style>body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6}</style></head><body>${documentPreview.html}</body></html>`],
+                { type: 'text/html' }
+            )
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${documentPreview.title || 'document'}.html`
+            a.click()
+            URL.revokeObjectURL(url)
+        }
+
         return (
             <div className="min-h-screen bg-gray-50 flex flex-col p-4">
                 <div className="bg-white rounded-2xl shadow-xl border border-gray-100 max-w-4xl w-full mx-auto overflow-hidden flex-1 flex flex-col">
@@ -313,6 +369,16 @@ export default function PublicSharePage() {
                                 <p className="text-xs text-gray-500">Read Only</p>
                             </div>
                         </div>
+                        {/* Export button — downloads rendered HTML */}
+                        <button
+                            onClick={handleExport}
+                            disabled={!documentPreview}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-40"
+                            title="Export as HTML file"
+                        >
+                            <DownloadIcon />
+                            Export
+                        </button>
                     </div>
                     <div className="flex-1 bg-white overflow-y-auto p-8 relative">
                         {isDocumentLoading ? (
