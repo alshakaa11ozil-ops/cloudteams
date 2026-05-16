@@ -121,13 +121,27 @@ export async function createSharedLink(
     else if (options.folderId) { targetType = 'folder'; targetId = options.folderId; }
     else if (options.documentId) { targetType = 'document' as any; targetId = options.documentId; }
 
+    // REPLACE the logActivity call in createSharedLink:
     void logActivity({
         teamId,
         userId,
         action: 'link_created',
         targetType,
         targetId,
-        metadata: { linkId: link.id, hasPassword: !!password_hash }
+        metadata: {
+            linkId: link.id,
+            hasPassword: !!password_hash,
+            // Add the target name so activity feed can display it
+            file_name: options.fileId
+                ? (await prisma.file.findFirst({ where: { id: options.fileId }, select: { original_name: true } }))?.original_name
+                : undefined,
+            folder_name: options.folderId
+                ? (await prisma.folder.findFirst({ where: { id: options.folderId }, select: { name: true } }))?.name
+                : undefined,
+            document_title: options.documentId
+                ? (await prisma.documents.findFirst({ where: { id: options.documentId }, select: { title: true } }))?.title
+                : undefined,
+        }
     });
 
     // Real-time notification via helper
@@ -595,10 +609,10 @@ export async function listTeamShareLinks(userId: number, teamId: number) {
     const links = await prisma.sharedLink.findMany({
         where,
         include: {
-            files:     { select: { id: true, original_name: true, mime_type: true } },
-            folders:   { select: { id: true, name: true } },
+            files: { select: { id: true, original_name: true, mime_type: true } },
+            folders: { select: { id: true, name: true } },
             documents: { select: { id: true, title: true } },
-            creator:   { select: { id: true, username: true, full_name: true } },
+            creator: { select: { id: true, username: true, full_name: true } },
         },
         orderBy: { created_at: 'desc' },
     });

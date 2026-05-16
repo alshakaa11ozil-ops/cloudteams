@@ -39,6 +39,7 @@ export const createVersion = async (
             storage_path: file.storage_path,
             file_size: file.file_size,
             uploaded_by: file.uploaded_by,
+            encryption_iv: file.encryption_iv,
         },
     });
 };
@@ -63,7 +64,7 @@ export const createCollaborativeVersionCheckpoint = async (fileId: number): Prom
     try {
         const file = await prisma.file.findFirst({
             where: { id: fileId, is_deleted: false },
-            select: { id: true, storage_path: true, file_size: true, uploaded_by: true }
+            select: { id: true, storage_path: true, file_size: true, uploaded_by: true, encryption_iv: true }
         });
         if (!file) return;
 
@@ -76,6 +77,7 @@ export const createCollaborativeVersionCheckpoint = async (fileId: number): Prom
                 storage_path: file.storage_path,
                 file_size: file.file_size,
                 uploaded_by: file.uploaded_by,
+                encryption_iv: file.encryption_iv,
             },
         });
     } catch (err: any) {
@@ -122,6 +124,7 @@ export const listVersions = async (
         storage_path: v.storage_path,
         file_size: v.file_size,
         uploaded_by: v.uploaded_by,
+        encryption_iv: v.encryption_iv,
         created_at: v.created_at,
         uploader: v.uploader
             ? { id: v.uploader.id, username: v.uploader.username, email: v.uploader.email }
@@ -219,6 +222,7 @@ export const restoreVersion = async (
             data: {
                 storage_path: targetVersion.storage_path,
                 file_size: targetVersion.file_size,
+                encryption_iv: targetVersion.encryption_iv,
 
                 // WHY null: collaborative editor prioritises yjs_state over disk file.
                 // Without clearing this, the editor ignores the restored storage_path
