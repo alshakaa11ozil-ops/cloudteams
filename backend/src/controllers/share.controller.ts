@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { createSharedLink, getLinkMetadata, getTeamContent, downloadSharedFile, revokeSharedLink, listFileSharedLinks } from '../services/share.service';
+import { createSharedLink, getLinkMetadata, getTeamContent, downloadSharedFile, revokeSharedLink, listFileSharedLinks, getSharedDocumentContent } from '../services/share.service';
 import { AppError } from '../utils/teamGuard';
 import { getFileStream } from '../services/storage.service';
 import { decryptBuffer, isEncryptionEnabled } from '../utils/fileEncryption';
@@ -120,7 +120,7 @@ export const createFolderLinkHandler = async (req: Request, res: Response): Prom
 // OUTPUTS: 201 with the created SharedLink row
 export const createDocumentLinkHandler = async (req: Request, res: Response): Promise<void> => {
     try {
-        const documentId = parseInt(req.params.id as string, 10);
+        const documentId = parseInt(req.params.docId as string, 10);
         const teamId = parseInt(req.body.teamId as string, 10);
 
         if (isNaN(documentId) || isNaN(teamId)) {
@@ -245,7 +245,6 @@ export const downloadFileHandler = async (req: Request, res: Response): Promise<
 // ===========================================================================
 // PURPOSE: Return read-only HTML representation of a shared document
 // ===========================================================================
-import { getSharedDocumentContent } from '../services/share.service';
 export const getSharedDocumentHandler = async (req: Request, res: Response): Promise<void> => {
     try {
         const token = req.params.token as string;

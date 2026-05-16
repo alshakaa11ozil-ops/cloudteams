@@ -6,7 +6,7 @@ import { fetchTeamShareLinks, revokeShareLink } from '../api/shares'
 import { useAuth } from '../hooks/useAuth'
 import { fetchTeamMembers } from '../api/teams'
 import type { SharedLink } from '../api/shares'
-import { FileText, Folder, Link as LinkIcon, Trash2, Globe, Clock } from 'lucide-react'
+import { FileText, Folder, Link as LinkIcon, Trash2, Globe, Clock, Copy } from 'lucide-react'
 
 type FilterType = 'all' | 'files' | 'folders' | 'documents' | 'team'
 
@@ -230,7 +230,19 @@ export default function SharingPage() {
                                                     <span className="text-gray-400">Never</span>
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-right">
+                                            <td className="px-6 py-4 text-right whitespace-nowrap">
+                                                <button
+                                                    onClick={() => {
+                                                        const url = `${window.location.origin}/share/${link.token}`;
+                                                        navigator.clipboard.writeText(url);
+                                                        toast.success('Link copied to clipboard');
+                                                    }}
+                                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-blue-600 hover:bg-blue-50 mr-2"
+                                                    title="Copy link"
+                                                >
+                                                    <Copy className="w-3.5 h-3.5" />
+                                                    Copy
+                                                </button>
                                                 <button
                                                     onClick={() => {
                                                         if (confirm('Are you sure you want to revoke this link? Anyone using it will immediately lose access.')) {

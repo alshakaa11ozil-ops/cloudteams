@@ -331,6 +331,7 @@ export interface FileVersion {
   storage_path: string;
   file_size: number;
   created_at: string;
+  encryption_iv?: string | null;
   uploaded_by: number;
   uploader?: {
     id: number;

@@ -156,7 +156,7 @@ export default function FileDetailSidebar({
         blobUrlRef.current = null
       }
     }
-  }, [file?.id, file?.mime_type, activeTab, teamId])
+  }, [file?.id, file?.updated_at, file?.mime_type, activeTab, teamId])
 
   // ── Queries ───────────────────────────────────────────────────────────────
 

@@ -803,6 +803,7 @@ export const renameFile = async (
 //   sanitize with DOMPurify on the frontend for belt-and-suspenders safety.
 // ===========================================================================
 function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
+    if (!node) return '';
     if (node instanceof Y.XmlText) {
         const raw = String(node.toJSON())
         const text = raw
@@ -821,10 +822,16 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
     }
 
     if (node instanceof Y.XmlFragment) {
-        return Array.from(node as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+        return Array.from(node as unknown as Iterable<any>)
+            .filter(Boolean)
+            .map((c: any) => yjsNodeToHtml(c)).join('')
+
+
     }
 
+
     const el = node as Y.XmlElement
+    if (!el.nodeName) return '';  // ← ADD THIS — guards against undefined nodeName
     const tag = el.nodeName
     const attrs = el.getAttributes()
     const children = Array.from(el as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
@@ -881,6 +888,7 @@ export const getFilePreview = async (
     previewable: boolean;
     storagePath?: string;
     buffer?: Buffer; // Added to support decrypted in-memory previews
+    stream?: Readable; // Added to support direct R2 streaming
     mimeType?: string;
     type?: 'html';
     content?: string;
@@ -948,13 +956,25 @@ export const getFilePreview = async (
                 mimeType: mime
             };
         } else {
-            // Unencrypted — stream directly from disk for better memory usage
-            return {
-                streamable: true,
-                previewable: true,
-                storagePath: absolutePath,
-                mimeType: mime
-            };
+            // Unencrypted — if on disk, we can use storagePath for disk-streaming (efficient)
+            if (existsOnDisk) {
+                return {
+                    streamable: true,
+                    previewable: true,
+                    storagePath: absolutePath,
+                    mimeType: mime
+                };
+            } else {
+                // Not on disk (migrated to R2) — stream directly from R2
+                const r2Stream = await getFileStream(file.storage_path);
+
+                return {
+                    streamable: true,
+                    previewable: true,
+                    stream: r2Stream,
+                    mimeType: mime
+                };
+            }
         }
     }
 

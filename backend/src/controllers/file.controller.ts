@@ -590,6 +590,9 @@ export const previewFileHandler = async (
                 // Encrypted: send the decrypted buffer directly
                 res.setHeader('Content-Length', previewData.buffer.length);
                 res.send(previewData.buffer);
+            } else if (previewData.stream) {
+                // Not on disk (migrated to R2) — stream directly from R2
+                previewData.stream.pipe(res);
             } else if (previewData.storagePath) {
                 // Unencrypted: stream from disk
                 const fs = require('fs');

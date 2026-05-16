@@ -254,6 +254,36 @@ export async function getTeamMembers(req: Request, res: Response) {
   }
 }
 
+// ============================================================
+// getMeMember
+//
+// PURPOSE: Handle GET /api/teams/:id/members/me
+//          Return the current user's membership details in the team.
+// ============================================================
+export async function getMeMember(req: Request, res: Response) {
+  try {
+    const teamId = parseInt(req.params.id as string, 10);
+    const userId = req.user!.userId;
+    
+    const member = await prisma.teamMember.findFirst({
+      where: { team_id: teamId, user_id: userId },
+      include: {
+        user: { select: { id: true, username: true, email: true, full_name: true } }
+      }
+    });
+
+    if (!member) {
+      res.status(404).json({ error: 'You are not a member of this team' });
+      return;
+    }
+
+    res.status(200).json({ member });
+  } catch (error) {
+    console.error('[getMeMember]', error);
+    res.status(500).json({ error: 'Failed to fetch your membership' });
+  }
+}
+
 // PURPOSE: Update team name and/or description
 // INPUTS:  req.params.id = teamId, req.body = { name?, description? }
 // OUTPUTS: 200 with updated team

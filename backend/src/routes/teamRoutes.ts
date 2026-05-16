@@ -31,6 +31,7 @@ router.post('/', authenticate, teamController.createTeam);
 router.get('/', authenticate, teamController.getUserTeams);
 router.get('/:id', authenticate, requireRole('viewer'), teamController.getTeamById);
 router.post('/:id/invite', authenticate, requireRole('admin'), teamController.inviteMember);
+router.get('/:id/members/me', authenticate, teamController.getMeMember);
 router.get('/:id/members', authenticate, requireRole('viewer'), teamController.getTeamMembers);
 router.patch('/:id/members/:userId', authenticate, requireRole('admin'), teamController.changeMemberRole);
 router.delete('/:id/members/:userId', authenticate, requireRole('admin'), teamController.removeMember);

@@ -118,7 +118,7 @@ export async function getSharedTeamContent(token: string, password?: string, fol
 export async function downloadSharedFile(token: string, password?: string, fileId?: number): Promise<{ blob: Blob; filename: string }> {
     const response = await publicApi.post(
         `/share/${token}/download`,
-        { fileId },
+        fileId ? { fileId } : {},
         {
             headers: password ? { 'x-share-password': password } : {},
             responseType: 'blob'

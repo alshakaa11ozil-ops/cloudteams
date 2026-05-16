@@ -111,10 +111,13 @@ export default function PublicSharePage() {
             setIsPasswordVerified(true)
             toast.success('Download started')
         } catch (err: any) {
-            if (err.response?.status === 401 || err.response?.status === 403) {
-                toast.error('Incorrect password or download limit reached')
+            const status = err.response?.status
+            if (status === 410) {
+                toast.error('This link has reached its download limit or has expired.')
+            } else if (status === 401) {
+                toast.error('Incorrect password. Please try again.')
             } else {
-                toast.error(err.response?.data?.error || 'Failed to download file')
+                toast.error(err.response?.data?.error || 'Failed to download file.')
             }
         } finally {
             setIsDownloading(false)
@@ -126,8 +129,13 @@ export default function PublicSharePage() {
         try {
             const { blob } = await downloadSharedFile(token!, password || undefined)
             setPreviewBlob(blob)
-        } catch {
-            toast.error('Failed to load preview')
+        } catch (err: any) {
+            const status = err.response?.status
+            if (status === 410) {
+                toast.error('This link has reached its download limit or has expired.')
+            } else {
+                toast.error('Failed to load preview')
+            }
         }
     }
 
@@ -138,7 +146,12 @@ export default function PublicSharePage() {
             const content = await getSharedDocumentContent(token!, password || undefined, documentId)
             setDocumentPreview(content)
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to load document')
+            const status = err.response?.status
+            if (status === 410) {
+                toast.error('This link has reached its download limit or has expired.')
+            } else {
+                toast.error(err.response?.data?.error || 'Failed to load document')
+            }
         } finally {
             setIsDocumentLoading(false)
         }
@@ -158,6 +171,9 @@ export default function PublicSharePage() {
 
     // ── Error ────────────────────────────────────────────────────────────────
     if (metadataError) {
+        const status = (metadataError as any).response?.status
+        const isGone = status === 410
+
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
                 <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-gray-100">
@@ -167,8 +183,15 @@ export default function PublicSharePage() {
                                 d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                     </div>
-                    <h2 className="text-xl font-bold text-gray-900 mb-2">Link Unavailable</h2>
-                    <p className="text-gray-600">The link you followed may be expired, deleted, or invalid.</p>
+                    <h2 className="text-xl font-bold text-gray-900 mb-2">
+                        {isGone ? 'Link Expired' : 'Link Unavailable'}
+                    </h2>
+                    <p className="text-gray-600">
+                        {isGone 
+                            ? 'This link has reached its download limit or has expired.'
+                            : 'The link you followed may be expired, deleted, or invalid.'
+                        }
+                    </p>
                 </div>
             </div>
         )
