@@ -70,9 +70,10 @@ interface FileCardProps {
   onMove: () => void
   onSelect: () => void      // ← opens the FileDetailSidebar
   formatBytes: (bytes: number) => string
+  hideDelete?: boolean      // ← conditionally hide delete button
 }
 
-function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, onMove, onSelect, formatBytes }: FileCardProps) {
+function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, onMove, onSelect, formatBytes, hideDelete }: FileCardProps) {
   const [showActions, setShowActions] = useState(false)
   const queryClient = useQueryClient()
 
@@ -263,34 +264,36 @@ function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, o
           </button>
 
           {/* Delete */}
-          <button
-            id={`delete-file-${file.id}`}
-            onClick={e => {
-              e.stopPropagation()
-              if (window.confirm(`Delete "${file.original_name}"?\nIt will be moved to the Recycle Bin.`)) {
-                onDelete()
-                // Optimistically remove from cache so UI updates instantly.
-                // WHY folderId in the key: FileBrowser's filesQuery uses ['files', teamId, folderId]
-                // Omitting folderId would target a different (non-existent) cache entry — silent no-op.
-                queryClient.setQueryData(
-                  ['files', teamId, folderId],
-                  (old: CloudFile[] | undefined) => old?.filter(f => f.id !== file.id) ?? []
-                )
-              }
-            }}
-            disabled={lockedByOther}
-            className="
-              py-1.5 text-xs text-gray-600 hover:text-red-600
-              hover:bg-red-50 flex items-center justify-center gap-1
-              rounded-br-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-600
-            "
-            title={lockedByOther ? "File is locked" : "Delete"}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
+          {!hideDelete && (
+            <button
+              id={`delete-file-${file.id}`}
+              onClick={e => {
+                e.stopPropagation()
+                if (window.confirm(`Delete "${file.original_name}"?\nIt will be moved to the Recycle Bin.`)) {
+                  onDelete()
+                  // Optimistically remove from cache so UI updates instantly.
+                  // WHY folderId in the key: FileBrowser's filesQuery uses ['files', teamId, folderId]
+                  // Omitting folderId would target a different (non-existent) cache entry — silent no-op.
+                  queryClient.setQueryData(
+                    ['files', teamId, folderId],
+                    (old: CloudFile[] | undefined) => old?.filter(f => f.id !== file.id) ?? []
+                  )
+                }
+              }}
+              disabled={lockedByOther}
+              className="
+                py-1.5 text-xs text-gray-600 hover:text-red-600
+                hover:bg-red-50 flex items-center justify-center gap-1
+                rounded-br-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-600
+              "
+              title={lockedByOther ? "File is locked" : "Delete"}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -311,6 +314,7 @@ interface FileListProps {
   onMoveFileRequest: (fileId: number, fileName: string, folderId: number | null) => void
   onFileClick: (file: CloudFile) => void   // ← opens the sidebar
   formatBytes: (bytes: number) => string
+  hideDelete?: boolean
 }
 
 export default function FileList({
@@ -325,6 +329,7 @@ export default function FileList({
   onMoveFileRequest,
   onFileClick,
   formatBytes,
+  hideDelete,
 }: FileListProps) {
 
   if (isLoading) return <FileListSkeleton />
@@ -396,6 +401,7 @@ export default function FileList({
                 onMove={() => onMoveFileRequest(file.id, file.original_name, file.folder_id)}
                 onSelect={() => onFileClick(file)}    // ← opens the sidebar
                 formatBytes={formatBytes}
+                hideDelete={hideDelete}
               />
             ))}
           </div>

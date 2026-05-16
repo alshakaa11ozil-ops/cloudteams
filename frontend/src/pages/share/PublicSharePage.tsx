@@ -187,7 +187,7 @@ export default function PublicSharePage() {
                         {isGone ? 'Link Expired' : 'Link Unavailable'}
                     </h2>
                     <p className="text-gray-600">
-                        {isGone 
+                        {isGone
                             ? 'This link has reached its download limit or has expired.'
                             : 'The link you followed may be expired, deleted, or invalid.'
                         }
@@ -289,12 +289,15 @@ export default function PublicSharePage() {
         )
     }
 
-    // ── Single document share ────────────────────────────────────────────────
-    if (metadata.type === 'document') {
-        if (!documentPreview && !isDocumentLoading) {
+    // Auto-load document content when access is granted
+    useEffect(() => {
+        if (hasAccess && metadata?.type === 'document' && !documentPreview && !isDocumentLoading) {
             void handleViewDocument()
         }
+    }, [hasAccess, metadata?.type, documentPreview, isDocumentLoading, token])
 
+    // ── Single document share ────────────────────────────────────────────────
+    if (metadata.type === 'document') {
         return (
             <div className="min-h-screen bg-gray-50 flex flex-col p-4">
                 <div className="bg-white rounded-2xl shadow-xl border border-gray-100 max-w-4xl w-full mx-auto overflow-hidden flex-1 flex flex-col">
@@ -317,7 +320,7 @@ export default function PublicSharePage() {
                                 <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
                             </div>
                         ) : documentPreview ? (
-                            <div 
+                            <div
                                 className="prose prose-sm max-w-none prose-slate"
                                 dangerouslySetInnerHTML={{ __html: documentPreview.html }}
                             />
@@ -365,11 +368,10 @@ export default function PublicSharePage() {
                                     {i > 0 && <ChevronRight />}
                                     <button
                                         onClick={() => navigateToBreadcrumb(crumb, i)}
-                                        className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${
-                                            i === breadcrumbs.length - 1
-                                                ? 'text-indigo-600 bg-indigo-50'
-                                                : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
-                                        }`}
+                                        className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${i === breadcrumbs.length - 1
+                                            ? 'text-indigo-600 bg-indigo-50'
+                                            : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
+                                            }`}
                                     >
                                         {crumb.name}
                                     </button>
@@ -379,24 +381,24 @@ export default function PublicSharePage() {
                     )}
                 </div>
 
-                    {/* Document Modal inside Team Share */}
-                    {documentPreview && (
-                        <div className="absolute inset-0 bg-white z-10 flex flex-col">
-                            <div className="p-4 border-b border-gray-100 flex items-center justify-between shrink-0">
-                                <div className="flex items-center gap-2">
-                                    <DocIcon />
-                                    <h2 className="font-semibold text-gray-900 truncate max-w-[250px]">{documentPreview.title}</h2>
-                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full ml-2">Read Only</span>
-                                </div>
-                                <button onClick={() => setDocumentPreview(null)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors">
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                </button>
+                {/* Document Modal inside Team Share */}
+                {documentPreview && (
+                    <div className="absolute inset-0 bg-white z-10 flex flex-col">
+                        <div className="p-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+                            <div className="flex items-center gap-2">
+                                <DocIcon />
+                                <h2 className="font-semibold text-gray-900 truncate max-w-[250px]">{documentPreview.title}</h2>
+                                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full ml-2">Read Only</span>
                             </div>
-                            <div className="flex-1 overflow-y-auto p-6 bg-white">
-                                <div className="prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: documentPreview.html }} />
-                            </div>
+                            <button onClick={() => setDocumentPreview(null)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
                         </div>
-                    )}
+                        <div className="flex-1 overflow-y-auto p-6 bg-white">
+                            <div className="prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: documentPreview.html }} />
+                        </div>
+                    </div>
+                )}
 
                 {/* Content list */}
                 <div className="max-h-[420px] overflow-y-auto relative">

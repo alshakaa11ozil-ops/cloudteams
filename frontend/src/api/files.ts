@@ -626,6 +626,32 @@ export async function restoreVersion(
   )
   return res.data
 }
+
+// ---------------------------------------------------------------------------
+// saveFileVersion
+// PURPOSE:  Explicitly snapshot the current file state as a named version.
+//           Follows the Google Docs model: user deliberately clicks "Save Version"
+//           instead of creating versions on every auto-save.
+//
+// ROUTE:  POST /api/teams/:teamId/files/:fileId/versions
+//
+// INPUTS:
+//   teamId      — team ownership (must be editor+)
+//   fileId      — file to snapshot
+//   versionName — optional label shown in version history (e.g. "Before Q3 review")
+//
+// OUTPUTS: { message, version } — the created FileVersion row
+// ---------------------------------------------------------------------------
+export async function saveFileVersion(
+  teamId: number,
+  fileId: number,
+  versionName?: string
+): Promise<{ message: string; version: FileVersion }> {
+  const res = await api.post(`/teams/${teamId}/files/${fileId}/versions`, {
+    ...(versionName ? { versionName } : {}),
+  })
+  return res.data
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // ACTIVITY FEED
 // ─────────────────────────────────────────────────────────────────────────────

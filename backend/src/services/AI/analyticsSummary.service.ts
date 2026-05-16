@@ -10,44 +10,49 @@ export async function generateAnalyticsSummary(teamId: number, startDate?: strin
         totalFiles: data.storage.fileCount,
         totalStorage: data.storage.totalBytesFormatted,
         activeMembers: data.memberActivity.length,
-        fileTypes: data.fileTypes,
+        topContributors: data.memberActivity.slice(0, 3).map(m => ({ name: m.username, actions: m.action_count })),
+        fileTypes: data.fileTypes.slice(0, 5),
         topFiles: data.largestFiles.map(f => ({ name: f.original_name, size: f.file_size_formatted })),
-        activity: data.activityByType
+        activitySummary: data.activityByType.slice(0, 10)
     };
 
     // 3. Construct the prompt
-    const prompt = `
-You are an expert data analyst for a cloud file storage product called CloudTeams.
-Analyze the following JSON analytics data for a specific team and write a 2-3 sentence "Executive Summary".
-The summary should be actionable, highlighting any interesting trends, highly active members, or storage warnings.
-Do not use technical jargon or mention JSON/data structures. Keep it conversational but professional.
+    // IMPORTANT: explicitly request complete sentences to avoid truncation issues.
+    const prompt = `You are an expert data analyst for a cloud file storage platform called CloudTeams.
+Analyze the following team analytics data and write a concise Executive Summary of exactly 2-3 complete sentences.
+CRITICAL: Every sentence must be fully complete. Do NOT cut off mid-sentence.
+Highlight key trends such as most active members, storage usage, or file activity patterns.
+Keep the tone conversational and professional. Do not mention JSON, data structures, or technical terms.
+Output ONLY the summary text with no headers, bullets, or markdown formatting.
 
-Data:
-${JSON.stringify(contextData, null, 2)}
-`;
+Analytics Data:
+${JSON.stringify(contextData, null, 2)}`;
 
     // 4. Call Gemini
-    // Use a slightly higher temperature (0.5) to make it read naturally, but not hallucinate
+    // maxTokens: 500 gives ample room for 2-3 complete sentences (was 200 — caused truncation!)
+    // temperature: 0.5 makes it read naturally
     try {
-        const summary = await callGemini(prompt, 200, { temperature: 0.5 });
+        const summary = await callGemini(prompt, 500, { temperature: 0.5 });
         return summary;
     } catch (error) {
-        console.error('[generateAnalyticsSummary] Error:', error);
-        
+        console.error('[generateAnalyticsSummary] AI error, using heuristic fallback:', error);
+
         // Fallback heuristic summary when AI is rate-limited/down
         if (data.storage.fileCount === 0) {
             return "Your team hasn't uploaded any files yet. Start collaborating by uploading some documents!";
         }
-        
+
         const topUser = data.memberActivity.length > 0 ? data.memberActivity[0].username : 'your team members';
-        const mainType = data.fileTypes.length > 0 ? (data.fileTypes[0].mime_type.split('/').pop()?.toUpperCase() || 'files') : 'files';
-        
-        let fallback = `Your team is actively collaborating, with ${topUser} leading recent activity. You have ${data.storage.fileCount} files taking up ${data.storage.totalBytesFormatted}, primarily consisting of ${mainType}.`;
-        
+        const mainType = data.fileTypes.length > 0
+            ? (data.fileTypes[0].mime_type.split('/').pop()?.toUpperCase() || 'files')
+            : 'files';
+
+        let fallback = `Your team is actively collaborating, with ${topUser} leading recent activity. You currently have ${data.storage.fileCount} files using ${data.storage.totalBytesFormatted} of storage, primarily consisting of ${mainType} files.`;
+
         if (data.topFolders && data.topFolders.length > 0) {
-            fallback += ` The most active workspace is currently the "${data.topFolders[0].folder_name}" folder.`;
+            fallback += ` The most active workspace is the "${data.topFolders[0].folder_name}" folder with ${data.topFolders[0].file_count} files.`;
         }
-        
+
         return fallback;
     }
 }

@@ -135,6 +135,7 @@ model FileVersion {
   uploaded_by    Int
   created_at     DateTime @default(now())
   encryption_iv  String?  @db.VarChar(32)
+  version_name   String?  @db.VarChar(255)
   yjs_state      Bytes?
   file           File     @relation(fields: [file_id], references: [id], onDelete: Cascade)
   uploader       User     @relation("FileVersionUploader", fields: [uploaded_by], references: [id])

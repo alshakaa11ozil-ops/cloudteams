@@ -1,8 +1,10 @@
 // src/pages/AnalyticsDashboard.tsx
-// FIXES APPLIED:
-//   - null guard on uploadsPerDay before format()
-//   - "Active Members" → "Active Contributors"
-//   - fileCount field verified against AnalyticsResult type
+// FIXES:
+//   - AI summary maxTokens increased (200→500) to fix truncated output
+//   - Added error state + retry button for summary
+//   - Added refresh icon on summary card
+//   - summary query now runs in parallel (not dependent on base data)
+//   - retry:1 to avoid hammering rate-limited API
 
 import { useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
@@ -38,14 +40,22 @@ export default function AnalyticsDashboard() {
     queryKey: ['analytics', teamId, timeRange],
     queryFn: () => fetchAnalytics(teamId, dateParams.startDate, dateParams.endDate),
     enabled: teamId > 0,
-    staleTime: 60_000, // analytics don't need real-time — 1 minute cache
+    staleTime: 60_000,
   })
 
-  const { data: summary, isLoading: isLoadingSummary } = useQuery({
+  // AI summary — runs in parallel, independent of base analytics query
+  const {
+    data: summary,
+    isLoading: isLoadingSummary,
+    isError: isSummaryError,
+    refetch: refetchSummary,
+  } = useQuery({
     queryKey: ['analytics-summary', teamId, timeRange],
     queryFn: () => fetchAnalyticsSummary(teamId, dateParams.startDate, dateParams.endDate),
-    enabled: teamId > 0 && !!data, // Wait for base data to load first, optional but good
-    staleTime: 5 * 60_000, // 5 minutes cache
+    enabled: teamId > 0,
+    staleTime: 5 * 60_000,   // 5 minutes cache
+    retry: 1,                 // 1 retry — avoid hammering rate-limited API
+    gcTime: 10 * 60_000,
   })
 
   if (isLoading) {
@@ -71,7 +81,6 @@ export default function AnalyticsDashboard() {
     value: ft.count || 0,
   }))
 
-  // Helper to group activityByType for the stacked bar chart
   const prepareActivityData = (raw: any[]) => {
     const map: Record<string, any> = {}
     raw.forEach(item => {
@@ -133,18 +142,49 @@ export default function AnalyticsDashboard() {
             <div className="bg-indigo-100 p-2.5 rounded-lg shrink-0 shadow-sm">
               <SparklesIcon className="w-6 h-6 text-indigo-600" />
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-indigo-900">AI Executive Summary</h2>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-4 mb-1">
+                <h2 className="text-lg font-semibold text-indigo-900">AI Executive Summary</h2>
+                {/* Refresh button — always available so user can force a new summary */}
+                {!isLoadingSummary && (
+                  <button
+                    onClick={() => void refetchSummary()}
+                    title="Refresh AI summary"
+                    className="text-indigo-400 hover:text-indigo-700 p-1.5 rounded-lg hover:bg-indigo-100 transition-colors flex-shrink-0"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+
               {isLoadingSummary ? (
-                <div className="flex items-center gap-3 mt-3 text-indigo-600">
+                <div className="flex items-center gap-3 mt-2 text-indigo-600">
                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>
-                   <p className="text-sm font-medium">Analyzing team activity & generating insights...</p>
+                   <p className="text-sm font-medium">Analyzing team activity &amp; generating insights...</p>
+                </div>
+              ) : isSummaryError ? (
+                <div className="mt-2 flex items-center gap-3 flex-wrap">
+                  <p className="text-sm text-amber-700">
+                    AI summary unavailable — API may be rate-limited. Using local analysis instead.
+                  </p>
+                  <button
+                    onClick={() => void refetchSummary()}
+                    className="text-xs font-bold text-indigo-600 hover:underline whitespace-nowrap"
+                  >
+                    Retry →
+                  </button>
                 </div>
               ) : summary ? (
-                <p className="mt-2 text-sm text-indigo-800 leading-relaxed max-w-5xl whitespace-pre-wrap">
+                <p className="mt-1 text-sm text-indigo-800 leading-relaxed max-w-5xl whitespace-pre-wrap">
                   {summary}
                 </p>
-              ) : null}
+              ) : (
+                <p className="mt-2 text-sm text-indigo-400 italic">
+                  No summary available. Click the refresh button to generate one.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -153,8 +193,6 @@ export default function AnalyticsDashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <StatCard label="Total Storage Used" value={data.storage?.totalBytesFormatted || '0 B'} badge="UNLIMITED CAPACITY" badgeColor="blue" />
           <StatCard label="Total Files" value={String(data.storage?.fileCount || 0)} />
-          {/* FIX: "Active Contributors" — memberActivity only counts users who acted,
-              not all team members. "Active Members" was misleading. */}
           <StatCard label="Active Contributors" value={String((data.memberActivity || []).length)} />
         </div>
 

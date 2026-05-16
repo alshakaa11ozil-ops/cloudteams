@@ -12,7 +12,7 @@
 // =============================================================================
 
 import { Request, Response } from 'express';
-import { listVersions, restoreVersion } from '../services/version.service';
+import { listVersions, restoreVersion, saveFileVersion } from '../services/version.service';
 import { AppError } from '../utils/teamGuard';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,28 @@ export const restoreVersionHandler = async (req: Request, res: Response): Promis
             return;
         }
         console.error('[restoreVersionHandler]', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+export const saveVersionHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const teamId = parseInt(req.params.teamId as string, 10);
+        const fileId = parseInt(req.params.fileId as string, 10);
+        const versionName = req.body.versionName as string | undefined;
+
+        if (isNaN(teamId) || isNaN(fileId)) {
+            res.status(400).json({ error: 'Invalid teamId or fileId' });
+            return;
+        }
+
+        const version = await saveFileVersion(fileId, teamId, req.user!.userId, versionName);
+        res.status(201).json({ message: 'Version saved', version });
+    } catch (err) {
+        if (err instanceof AppError) {
+            res.status(err.statusCode).json({ error: err.message });
+            return;
+        }
+        console.error('[saveVersionHandler]', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 };

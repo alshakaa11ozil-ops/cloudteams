@@ -41,7 +41,8 @@ export type ActivityAction =
     | 'document_renamed'
     | 'document_moved'
     | 'document_deleted'
-    | 'document_restored';
+    | 'document_restored'
+    | 'version_saved';
 
 export type ActivityTargetType = 'file' | 'folder' | 'comment' | 'team' | 'user' | 'document';
 

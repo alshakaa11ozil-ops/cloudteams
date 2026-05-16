@@ -195,8 +195,15 @@ export default function FileBrowser() {
   // ── Mutations ────────────────────────────────────────────────────────────────
   const deleteFileMutation = useMutation({
     mutationFn: (fileId: number) => deleteFile(fileId),
-    onSuccess: () => {
+    onSuccess: (_data, fileId) => {
       void queryClient.invalidateQueries({ queryKey: ['files', teamId, folderId] })
+      // Also remove from active search results so stale items don't linger
+      if (searchResults) {
+        setSearchResults(prev => prev
+          ? { ...prev, files: prev.files.filter(f => f.id !== fileId) }
+          : null
+        )
+      }
       toast.success('File moved to recycle bin')
     },
     onError: (err: any) => {
@@ -900,6 +907,7 @@ export default function FileBrowser() {
             currentUserId={user?.id ?? 0}
             onFolderClick={goToFolder}
             onDeleteFile={fileId => deleteFileMutation.mutate(fileId)}
+            hideDelete={isSearching}
             onRenameFile={(id, newName) => renameFileMutation.mutate({ id, newName })}
             onMoveFileRequest={(id, name, folderId) => setItemToMove({ id, type: 'file', name, currentParentId: folderId })}
             onFileClick={file => {

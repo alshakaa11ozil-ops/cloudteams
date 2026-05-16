@@ -21,7 +21,7 @@ import DOMPurify from 'dompurify'
 import {
   fetchLockStatus, fetchComments, addComment, editComment, deleteComment,
   fetchVersions, restoreVersion, fetchFilePreviewBlob, lockFile,
-  unlockFile, forceUnlockFile, fetchFileSummary,
+  unlockFile, forceUnlockFile, fetchFileSummary, saveFileVersion,
 } from '../api/files'
 import { fetchFileShares, revokeShareLink } from '../api/shares'
 import type { CloudFile, Comment, FileVersion, LockStatus, TeamRole } from '../types'
@@ -219,6 +219,17 @@ export default function FileDetailSidebar({
     onError: (err: any) => {
       toast.error(err.response?.data?.error ?? 'Failed to restore version')
     }
+  })
+
+  const saveVersionMutation = useMutation({
+    mutationFn: (versionName?: string) => saveFileVersion(teamId, file!.id, versionName),
+    onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ['versions', teamId, file?.id] })
+      toast.success(`Version ${data.version.version_number} saved`)
+    },
+    onError: (err: any) => {
+      toast.error(err.response?.data?.error ?? 'Failed to save version')
+    },
   })
 
   const revokeShareMutation = useMutation({
@@ -537,6 +548,31 @@ export default function FileDetailSidebar({
         {/* ════ VERSIONS TAB ════ */}
         {activeTab === 'versions' && (
           <div className="p-4 space-y-3">
+        {/* Save Version button — visible to editors+ */}
+            {(userRole === 'editor' || userRole === 'admin') && (
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-slate-400">Snapshots are created on upload or manually.</p>
+                <button
+                  id="save-version-btn"
+                  onClick={() => {
+                    const name = window.prompt('Version label (optional):', '')
+                    if (name === null) return // user pressed Cancel
+                    saveVersionMutation.mutate(name.trim() || undefined)
+                  }}
+                  disabled={saveVersionMutation.isPending}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors shadow-sm flex-shrink-0"
+                >
+                  {saveVersionMutation.isPending ? (
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                    </svg>
+                  )}
+                  Save Version
+                </button>
+              </div>
+            )}
             {versionsLoading && (
               <div className="flex justify-center py-8">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" />
@@ -545,7 +581,7 @@ export default function FileDetailSidebar({
             {!versionsLoading && versions.length === 0 && (
               <div className="text-center text-slate-400 py-10">
                 <p className="text-sm">No version history yet.</p>
-                <p className="text-xs mt-1">Upload the file again to create version 2.</p>
+                <p className="text-xs mt-1">Upload the file again or click "Save Version" to create one.</p>
               </div>
             )}
             {versions.map((v, idx) => (
