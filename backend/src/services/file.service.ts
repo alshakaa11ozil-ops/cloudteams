@@ -856,25 +856,32 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
 
     // Base fallback for pure Y.XmlText
     if (node instanceof Y.XmlText) {
-        const raw = String(node.toJSON())
-        const text = raw
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/\n/g, '<br>')
-        const attrs = node.getAttributes()
-        let result = text || ''
-        if (attrs.code) result = `<code>${result}</code>`
-        if (attrs.bold) result = `<strong>${result}</strong>`
-        if (attrs.italic) result = `<em>${result}</em>`
-        if (attrs.underline) result = `<u>${result}</u>`
-        if (attrs.strike) result = `<s>${result}</s>`
-        if (attrs.link) {
-            const href = typeof attrs.link === 'object' ? attrs.link.href : attrs.link
-            const target = typeof attrs.link === 'object' ? attrs.link.target || '_blank' : '_blank'
-            result = `<a href="${href}" target="${target}">${result}</a>`
+        // Use toDelta() to safely extract text segments and their formatting attributes
+        const delta = node.toDelta();
+        let result = '';
+        for (const op of delta) {
+            if (typeof op.insert === 'string') {
+                let segment = op.insert
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/\n/g, '<br>');
+                
+                const attrs = op.attributes || {};
+                if (attrs.code) segment = `<code>${segment}</code>`;
+                if (attrs.bold) segment = `<strong>${segment}</strong>`;
+                if (attrs.italic) segment = `<em>${segment}</em>`;
+                if (attrs.underline) segment = `<u>${segment}</u>`;
+                if (attrs.strike) segment = `<s>${segment}</s>`;
+                if (attrs.link) {
+                    const href = typeof attrs.link === 'object' ? attrs.link.href : attrs.link;
+                    const target = typeof attrs.link === 'object' ? attrs.link.target || '_blank' : '_blank';
+                    segment = `<a href="${href}" target="${target}" rel="noopener noreferrer nofollow">${segment}</a>`;
+                }
+                result += segment;
+            }
         }
-        return result
+        return result;
     }
 
     return '';
