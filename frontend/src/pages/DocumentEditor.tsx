@@ -334,7 +334,7 @@ export default function DocumentEditor() {
   const handleForceUnlock = async () => {
     if (!teamId || !docId || isLockLoading) return
     if (!window.confirm('Are you sure you want to force-unlock this document? This will kick out the current editor!')) return
-    
+
     setIsLockLoading(true)
     try {
       await forceUnlockDocument(teamId, docId)
@@ -486,8 +486,8 @@ export default function DocumentEditor() {
                 title="Manage active share links"
                 className={`
                   flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors
-                  ${showShareLinks 
-                    ? 'bg-indigo-500/20 text-indigo-400' 
+                  ${showShareLinks
+                    ? 'bg-indigo-500/20 text-indigo-400'
                     : 'text-slate-400 hover:text-white hover:bg-slate-600'}
                 `}
               >
@@ -507,10 +507,9 @@ export default function DocumentEditor() {
                 className={`
                   flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
                   disabled:opacity-40 disabled:cursor-not-allowed
-                  ${
-                    isLockedByMe
-                      ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                      : isLockedByOther
+                  ${isLockedByMe
+                    ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                    : isLockedByOther
                       ? 'bg-red-500/10 text-red-400 cursor-not-allowed'
                       : 'text-slate-400 hover:text-white hover:bg-slate-700'
                   }
@@ -553,8 +552,8 @@ export default function DocumentEditor() {
               onClick={() => setShowHistory(!showHistory)}
               className={`
                 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-                ${showHistory 
-                  ? 'bg-indigo-500/20 text-indigo-400' 
+                ${showHistory
+                  ? 'bg-indigo-500/20 text-indigo-400'
                   : 'text-slate-400 hover:text-white hover:bg-slate-700'}
               `}
             >
@@ -564,20 +563,20 @@ export default function DocumentEditor() {
           )}
 
           <button
-          onClick={handleExport}
-          disabled={isExporting || loadState !== 'connected'}
-          title="Export as .docx"
-          className="
+            onClick={handleExport}
+            disabled={isExporting || loadState !== 'connected'}
+            title="Export as .docx"
+            className="
             flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
             text-slate-400 hover:text-white hover:bg-slate-700
             disabled:opacity-40 disabled:cursor-not-allowed
             transition-colors
           "
-        >
-          {isExporting
-            ? <Loader2 size={14} className="animate-spin" />
-            : <Download size={14} />
-          }
+          >
+            {isExporting
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Download size={14} />
+            }
             <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
           </button>
         </div>
@@ -596,7 +595,7 @@ export default function DocumentEditor() {
             teamId={teamId!}
           />
         </div>
-        
+
         {/* Side Panels */}
         {showHistory && mode === 'document' && (
           <div className="w-80 border-l border-slate-700 bg-slate-850 flex-shrink-0 animate-in slide-in-from-right duration-200">

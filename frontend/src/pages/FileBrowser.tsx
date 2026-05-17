@@ -150,7 +150,7 @@ export default function FileBrowser() {
   const documentsQuery = useQuery({
     queryKey: ['documents', teamId, activeDocFolderId],
     queryFn: () => fetchDocuments(
-      String(teamId), 
+      String(teamId),
       activeDocFolderId === null ? 'null' : (activeDocFolderId === undefined ? undefined : String(activeDocFolderId))
     ),
     enabled: teamId > 0 && !isSearching,
@@ -164,12 +164,12 @@ export default function FileBrowser() {
 
     // 1. Filter out documents if the user is looking for a specific file MIME type
     if (searchOptions.mimeType) {
-       return []
+      return []
     }
 
     // 2. Filter by uploader
     if (searchOptions.uploadedBy) {
-       docs = docs.filter(doc => doc.createdBy === searchOptions.uploadedBy)
+      docs = docs.filter(doc => doc.createdBy === searchOptions.uploadedBy)
     }
 
     // 3. Sort
@@ -549,7 +549,7 @@ export default function FileBrowser() {
                 "
               />
             </div>
-            
+
             {/* Filter Toggle */}
             <Popover className="relative">
               {({ open, close }) => (
@@ -557,8 +557,8 @@ export default function FileBrowser() {
                   <Popover.Button
                     className={`
                       p-1.5 rounded-lg border transition-all flex items-center gap-1.5 focus:outline-none
-                      ${open || Object.keys(searchOptions).length > 2 
-                        ? 'bg-blue-50 border-blue-200 text-blue-600' 
+                      ${open || Object.keys(searchOptions).length > 2
+                        ? 'bg-blue-50 border-blue-200 text-blue-600'
                         : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}
                     `}
                     title="Search Filters"
@@ -580,125 +580,125 @@ export default function FileBrowser() {
                     leaveTo="opacity-0 translate-y-1"
                   >
                     <Popover.Panel className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-2xl border border-gray-100 z-[100] p-4 focus:outline-none">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-bold text-gray-800">Search Filters</h3>
-                    <button 
-                      onClick={() => {
-                        setSearchOptions({ sortBy: 'date', order: 'desc' })
-                        close()
-                      }}
-                      className="text-[11px] font-bold text-blue-600 hover:underline uppercase tracking-tight"
-                    >
-                      Reset All
-                    </button>
-                  </div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-bold text-gray-800">Search Filters</h3>
+                        <button
+                          onClick={() => {
+                            setSearchOptions({ sortBy: 'date', order: 'desc' })
+                            close()
+                          }}
+                          className="text-[11px] font-bold text-blue-600 hover:underline uppercase tracking-tight"
+                        >
+                          Reset All
+                        </button>
+                      </div>
 
-                  <div className="space-y-4">
-                    {/* Sort By */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Sort By</label>
-                      <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
-                        {(['name', 'date', 'size'] as const).map(s => (
-                          <button
-                            key={s}
-                            onClick={() => setSearchOptions(prev => ({ ...prev, sortBy: s }))}
-                            className={`
+                      <div className="space-y-4">
+                        {/* Sort By */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Sort By</label>
+                          <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                            {(['name', 'date', 'size'] as const).map(s => (
+                              <button
+                                key={s}
+                                onClick={() => setSearchOptions(prev => ({ ...prev, sortBy: s }))}
+                                className={`
                               flex-1 py-1 px-2 text-[11px] font-bold rounded-md transition-all
                               ${searchOptions.sortBy === s ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}
                             `}
-                          >
-                            {s.charAt(0).toUpperCase() + s.slice(1)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                              >
+                                {s.charAt(0).toUpperCase() + s.slice(1)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
 
-                    {/* Order */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Order</label>
-                      <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
-                        {(['desc', 'asc'] as const).map(o => (
-                          <button
-                            key={o}
-                            onClick={() => setSearchOptions(prev => ({ ...prev, order: o }))}
-                            className={`
+                        {/* Order */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Order</label>
+                          <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                            {(['desc', 'asc'] as const).map(o => (
+                              <button
+                                key={o}
+                                onClick={() => setSearchOptions(prev => ({ ...prev, order: o }))}
+                                className={`
                               flex-1 py-1 px-2 text-[11px] font-bold rounded-md transition-all
                               ${searchOptions.order === o ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}
                             `}
+                              >
+                                {o === 'desc' ? 'Newest/Largest' : 'Oldest/Smallest'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* MIME Type */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">File Type</label>
+                          <select
+                            value={searchOptions.mimeType || ''}
+                            onChange={e => setSearchOptions(prev => ({ ...prev, mimeType: e.target.value || undefined }))}
+                            className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
                           >
-                            {o === 'desc' ? 'Newest/Largest' : 'Oldest/Smallest'}
-                          </button>
-                        ))}
+                            <option value="">All Types</option>
+                            <option value="application/pdf">PDF Documents</option>
+                            <option value="image/">Images</option>
+                            <option value="application/vnd.openxmlformats-officedocument.wordprocessingml.document">Word Docs</option>
+                            <option value="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">Excel Sheets</option>
+                            <option value="text/">Text Files</option>
+                          </select>
+                        </div>
+
+                        {/* Member Filter */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Uploaded By</label>
+                          <select
+                            value={searchOptions.uploadedBy || ''}
+                            onChange={e => setSearchOptions(prev => ({ ...prev, uploadedBy: e.target.value ? parseInt(e.target.value) : undefined }))}
+                            className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">Anyone</option>
+                            {teamQuery.data?.members?.map(m => (
+                              <option key={m.user.id} value={m.user.id}>
+                                {m.user.id === user?.id ? 'Me' : m.user.username}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Folder Context */}
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Search In</label>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setSearchOptions(prev => ({ ...prev, folderId: undefined }))}
+                              className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all ${searchOptions.folderId === undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                            >
+                              Everywhere
+                            </button>
+                            <button
+                              disabled={folderId === null}
+                              onClick={() => setSearchOptions(prev => ({ ...prev, folderId: folderId }))}
+                              className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all disabled:opacity-30 ${searchOptions.folderId !== undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                            >
+                              This Folder
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* MIME Type */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">File Type</label>
-                      <select
-                        value={searchOptions.mimeType || ''}
-                        onChange={e => setSearchOptions(prev => ({ ...prev, mimeType: e.target.value || undefined }))}
-                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">All Types</option>
-                        <option value="application/pdf">PDF Documents</option>
-                        <option value="image/">Images</option>
-                        <option value="application/vnd.openxmlformats-officedocument.wordprocessingml.document">Word Docs</option>
-                        <option value="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">Excel Sheets</option>
-                        <option value="text/">Text Files</option>
-                      </select>
-                    </div>
-
-                    {/* Member Filter */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Uploaded By</label>
-                      <select
-                        value={searchOptions.uploadedBy || ''}
-                        onChange={e => setSearchOptions(prev => ({ ...prev, uploadedBy: e.target.value ? parseInt(e.target.value) : undefined }))}
-                        className="w-full bg-gray-50 border-none rounded-lg py-1.5 px-3 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">Anyone</option>
-                        {teamQuery.data?.members?.map(m => (
-                          <option key={m.user.id} value={m.user.id}>
-                            {m.user.id === user?.id ? 'Me' : m.user.username}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Folder Context */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Search In</label>
-                      <div className="flex gap-2">
+                      <div className="mt-4 pt-4 border-t border-gray-50">
                         <button
-                          onClick={() => setSearchOptions(prev => ({ ...prev, folderId: undefined }))}
-                          className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all ${searchOptions.folderId === undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
+                          onClick={() => close()}
+                          className="w-full bg-blue-600 text-white py-2 rounded-lg text-xs font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
                         >
-                          Everywhere
-                        </button>
-                        <button
-                          disabled={folderId === null}
-                          onClick={() => setSearchOptions(prev => ({ ...prev, folderId: folderId }))}
-                          className={`flex-1 py-1.5 px-3 text-[11px] font-bold rounded-lg border transition-all disabled:opacity-30 ${searchOptions.folderId !== undefined ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}
-                        >
-                          This Folder
+                          Apply Filters
                         </button>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 pt-4 border-t border-gray-50">
-                    <button
-                      onClick={() => close()}
-                      className="w-full bg-blue-600 text-white py-2 rounded-lg text-xs font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
-                    >
-                      Apply Filters
-                    </button>
-                  </div>
-                </Popover.Panel>
-              </Transition>
-              </>
-            )}
+                    </Popover.Panel>
+                  </Transition>
+                </>
+              )}
             </Popover>
           </div>
 
