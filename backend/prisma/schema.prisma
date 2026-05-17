@@ -3,6 +3,11 @@ generator client {
   previewFeatures = ["driverAdapters"]
 }
 
+generator erd {
+  provider = "prisma-erd-generator"
+  output   = "./database_erd.svg"
+  theme    = "forest" 
+}
 datasource db {
   provider = "postgresql"
 }
