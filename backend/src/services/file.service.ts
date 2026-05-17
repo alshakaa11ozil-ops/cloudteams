@@ -804,6 +804,57 @@ export const renameFile = async (
 // ===========================================================================
 function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
     if (!node) return '';
+
+    if (node instanceof Y.XmlFragment) {
+        // Use .toArray() — XmlFragment is not always directly iterable in all Yjs versions
+        const children = typeof (node as any).toArray === 'function'
+            ? (node as any).toArray() as any[]
+            : Array.from(node as unknown as Iterable<any>)
+        return children.filter(Boolean).map((c: any) => yjsNodeToHtml(c)).join('')
+    }
+
+    // Y.XmlElement inherits from Y.XmlText. Checking for nodeName correctly distinguishes elements.
+    if ((node as any).nodeName) {
+        const el = node as unknown as Y.XmlElement
+        const tag = el.nodeName
+        const attrs = el.getAttributes()
+        const children = Array.from(el as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
+
+        switch (tag) {
+            case 'paragraph': return `<p>${children || '<br>'}</p>`
+            case 'heading': {
+                const level = Number(attrs.level) || 1
+                return `<h${level}>${children}</h${level}>`
+            }
+            case 'bulletList': return `<ul>${children}</ul>`
+            case 'orderedList': return `<ol>${children}</ol>`
+            case 'listItem': return `<li>${children}</li>`
+            case 'taskList': return `<ul class="task-list">${children}</ul>`
+            case 'taskItem': {
+                const checked = attrs.checked ? ' checked' : ''
+                return `<li><label><input type="checkbox"${checked} disabled> ${children}</label></li>`
+            }
+            case 'blockquote': return `<blockquote>${children}</blockquote>`
+            case 'codeBlock': return `<pre><code>${children}</code></pre>`
+            case 'hardBreak': return '<br>'
+            case 'horizontalRule': return '<hr>'
+            case 'bold':
+            case 'strong': return `<strong>${children}</strong>`
+            case 'italic':
+            case 'em': return `<em>${children}</em>`
+            case 'underline': return `<u>${children}</u>`
+            case 'strike': return `<s>${children}</s>`
+            case 'link': {
+                const href = attrs.href ? ` href="${attrs.href}"` : ''
+                const target = attrs.target ? ` target="${attrs.target}"` : ''
+                return `<a${href}${target} rel="noopener noreferrer nofollow">${children}</a>`
+            }
+            case 'text': return children
+            default: return `<div>${children}</div>`
+        }
+    }
+
+    // Base fallback for pure Y.XmlText
     if (node instanceof Y.XmlText) {
         const raw = String(node.toJSON())
         const text = raw
@@ -818,44 +869,15 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
         if (attrs.italic) result = `<em>${result}</em>`
         if (attrs.underline) result = `<u>${result}</u>`
         if (attrs.strike) result = `<s>${result}</s>`
+        if (attrs.link) {
+            const href = typeof attrs.link === 'object' ? attrs.link.href : attrs.link
+            const target = typeof attrs.link === 'object' ? attrs.link.target || '_blank' : '_blank'
+            result = `<a href="${href}" target="${target}">${result}</a>`
+        }
         return result
     }
 
-    if (node instanceof Y.XmlFragment) {
-        // Use .toArray() — XmlFragment is not always directly iterable in all Yjs versions
-        const children = typeof (node as any).toArray === 'function'
-            ? (node as any).toArray() as any[]
-            : Array.from(node as unknown as Iterable<any>)
-        return children.filter(Boolean).map((c: any) => yjsNodeToHtml(c)).join('')
-    }
-
-
-    const el = node as Y.XmlElement
-    if (!el.nodeName) return '';  // ← ADD THIS — guards against undefined nodeName
-    const tag = el.nodeName
-    const attrs = el.getAttributes()
-    const children = Array.from(el as unknown as Iterable<any>).map((c: any) => yjsNodeToHtml(c)).join('')
-
-    switch (tag) {
-        case 'paragraph': return `<p>${children || '<br>'}</p>`
-        case 'heading': {
-            const level = Number(attrs.level) || 1
-            return `<h${level}>${children}</h${level}>`
-        }
-        case 'bulletList': return `<ul>${children}</ul>`
-        case 'orderedList': return `<ol>${children}</ol>`
-        case 'listItem': return `<li>${children}</li>`
-        case 'taskList': return `<ul class="task-list">${children}</ul>`
-        case 'taskItem': {
-            const checked = attrs.checked ? ' checked' : ''
-            return `<li><label><input type="checkbox"${checked} disabled> ${children}</label></li>`
-        }
-        case 'blockquote': return `<blockquote>${children}</blockquote>`
-        case 'codeBlock': return `<pre><code>${children}</code></pre>`
-        case 'hardBreak': return '<br>'
-        case 'horizontalRule': return '<hr>'
-        default: return `<div>${children}</div>`
-    }
+    return '';
 }
 
 export function extractHtmlFromYjsState(yjsState: Buffer): string {

@@ -189,8 +189,16 @@ export default function PublicSharePage() {
         }
     }
 
+    // Auto-load document content when access is granted
+    useEffect(() => {
+        if (hasAccess && metadata?.type === 'document' && !documentPreview && !isDocumentLoading) {
+            void handleViewDocument()
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hasAccess, metadata?.type])
+
     // ── Loading ──────────────────────────────────────────────────────────────
-    if (isMetadataLoading || (metadata?.type !== 'file' && hasAccess && isContentLoading)) {
+    if (isMetadataLoading || ((metadata?.type === 'folder' || metadata?.type === 'team') && hasAccess && isContentLoading)) {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center">
                 <div className="flex flex-col items-center gap-4">
@@ -278,14 +286,6 @@ export default function PublicSharePage() {
             </div>
         )
     }
-
-    // Auto-load document content when access is granted
-    useEffect(() => {
-        if (hasAccess && metadata?.type === 'document' && !documentPreview && !isDocumentLoading) {
-            void handleViewDocument()
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [hasAccess, metadata?.type])
 
     // ── Single file share ────────────────────────────────────────────────────
     const isImage = metadata.type === 'file' && metadata.mimeType?.startsWith('image/')
@@ -402,19 +402,7 @@ export default function PublicSharePage() {
             </div>
         )
     }
-    // ADD this check right before it:
-    if (metadata.type === 'folder' || metadata.type === 'team') {
-        if (isContentLoading) {
-            return (
-                <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-4">
-                        <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                        <p className="text-gray-500 font-medium">Loading contents...</p>
-                    </div>
-                </div>
-            )
-        }
-    }
+
     // ── Folder / Team share ──────────────────────────────────────────────────
     const totalItems =
         (sharedContent?.folders?.length ?? 0) +
