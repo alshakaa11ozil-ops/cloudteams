@@ -31,6 +31,9 @@ import {
     editDocumentComment,
     deleteDocumentComment,
     previewDocument,
+    lockDocument,
+    unlockDocument,
+    forceUnlockDocument,
 } from '../api/documents'
 
 interface DocumentDetailSidebarProps {
@@ -41,8 +44,8 @@ interface DocumentDetailSidebarProps {
     onClose: () => void
 }
 
-// Added 'versions' to the union type
-type TabId = 'preview' | 'comments' | 'versions' | 'sharing'
+// Added 'versions' and 'lock' to the union type
+type TabId = 'preview' | 'comments' | 'versions' | 'lock' | 'sharing'
 
 // ---------------------------------------------------------------------------
 // DocumentComments — unchanged from original
@@ -470,6 +473,138 @@ function DocumentVersionsTab({ document }: { document: DocumentSummary }) {
 }
 
 // ---------------------------------------------------------------------------
+// DocumentLockTab — NEW
+// ---------------------------------------------------------------------------
+
+function DocumentLockTab({
+    document,
+    teamId,
+    currentUserId,
+    isAdmin
+}: {
+    document: DocumentSummary
+    teamId: number
+    currentUserId: number
+    isAdmin: boolean
+}) {
+    const queryClient = useQueryClient()
+
+    const lockMutation = useMutation({
+        mutationFn: () => lockDocument(String(teamId), String(document.id)),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast.success('Document locked for editing')
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.error ?? 'Failed to lock document')
+        }
+    })
+
+    const unlockMutation = useMutation({
+        mutationFn: () => unlockDocument(String(teamId), String(document.id)),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast.success('Document unlocked')
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.error ?? 'Failed to unlock document')
+        }
+    })
+
+    const forceUnlockMutation = useMutation({
+        mutationFn: () => forceUnlockDocument(String(teamId), String(document.id)),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+            toast.success('Document force-unlocked')
+        },
+        onError: (err: any) => {
+            toast.error(err.response?.data?.error ?? 'Failed to force unlock')
+        }
+    })
+
+    const isLockActive = !!document.lockOwnerUserId && 
+                         !!document.lockExpiresAt && 
+                         new Date(document.lockExpiresAt) > new Date()
+                         
+    const isLockedByMe = isLockActive && document.lockOwnerUserId === currentUserId
+    const isForcing = forceUnlockMutation.isPending
+
+    return (
+        <div className="p-4 space-y-4">
+            {!isLockActive && (
+              <div className="flex flex-col items-center justify-center py-10 text-slate-400 space-y-2">
+                <svg className="w-12 h-12 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                </svg>
+                <p className="text-sm">Document is not currently locked</p>
+                <p className="text-xs text-slate-300">Open to start editing</p>
+                <button
+                    onClick={() => lockMutation.mutate()}
+                    disabled={lockMutation.isPending}
+                    className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50"
+                >
+                    {lockMutation.isPending ? 'Locking...' : 'Lock Document'}
+                </button>
+              </div>
+            )}
+
+            {isLockActive && (
+              <>
+                <div className={`p-4 rounded-lg border flex flex-col items-center text-center ${isLockedByMe ? 'bg-indigo-50 border-indigo-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <svg className={`w-10 h-10 mb-2 ${isLockedByMe ? 'text-indigo-500' : 'text-amber-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <h3 className="font-bold text-slate-800">Document is Locked</h3>
+                  <p className="text-sm text-slate-600 mt-1">
+                    {isLockedByMe
+                      ? 'You hold the lock for this document.'
+                      : `Being edited by another user (ID: ${document.lockOwnerUserId})`}
+                  </p>
+                  
+                  {isLockedByMe && (
+                      <button
+                          onClick={() => unlockMutation.mutate()}
+                          disabled={unlockMutation.isPending}
+                          className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 w-full"
+                      >
+                          {unlockMutation.isPending ? 'Unlocking...' : 'Unlock Document'}
+                      </button>
+                  )}
+                  
+                  <div className="mt-4 p-3 bg-white bg-opacity-60 rounded border border-inherit w-full text-left space-y-1">
+                    <div className="flex justify-between text-xs text-slate-500">
+                        <span>Expires at</span>
+                        <span>{format(new Date(document.lockExpiresAt!), 'HH:mm:ss')}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Admin force unlock — only visible to admins, only when someone else holds lock */}
+                {isAdmin && !isLockedByMe && (
+                  <div className="border border-red-200 rounded-lg p-3 bg-red-50">
+                    <p className="text-xs text-red-700 font-semibold mb-1">Admin Action</p>
+                    <p className="text-xs text-red-600 mb-3">
+                      Force-releasing a lock will kick the current editor to read-only mode.
+                    </p>
+                    <button
+                      onClick={() => { if (window.confirm('Force release this lock?')) forceUnlockMutation.mutate() }}
+                      disabled={isForcing}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                      </svg>
+                      {isForcing ? 'Releasing...' : 'Force Release Lock'}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
 // MAIN COMPONENT
 // ---------------------------------------------------------------------------
 
@@ -485,11 +620,12 @@ export default function DocumentDetailSidebar({
 
     if (!document) return null
 
-    // Added 'versions' tab between comments and sharing
+    // Added 'versions' and 'lock' tab
     const tabs: { id: TabId; label: string }[] = [
         { id: 'preview', label: 'Preview' },
         { id: 'comments', label: 'Comments' },
         { id: 'versions', label: 'Versions' },
+        { id: 'lock', label: 'Lock' },
         { id: 'sharing', label: 'Sharing' },
     ]
 
@@ -569,6 +705,15 @@ export default function DocumentDetailSidebar({
                 {/* NEW: Versions tab */}
                 {activeTab === 'versions' && (
                     <DocumentVersionsTab document={document} />
+                )}
+
+                {activeTab === 'lock' && (
+                    <DocumentLockTab
+                        document={document}
+                        teamId={teamId}
+                        currentUserId={currentUserId}
+                        isAdmin={_isAdmin}
+                    />
                 )}
 
                 {activeTab === 'sharing' && (

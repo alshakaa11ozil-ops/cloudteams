@@ -291,15 +291,7 @@ export default function FileDetailSidebar({
     }
   }
 
-  // Release lock on sidebar unmount (user closes sidebar mid-edit)
-  useEffect(() => {
-    return () => {
-      if (lockToken && file) {
-        void unlockFile(teamId, file.id, lockToken).catch(() => { })
-        sessionStorage.removeItem(lockKey(file.id))
-      }
-    }
-  }, [lockToken, file?.id, teamId])
+
 
   // ── Conditional render AFTER all hooks ────────────────────────────────────
   if (!file) return null

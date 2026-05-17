@@ -20,6 +20,9 @@ import * as DocumentService from '../services/document.service'
 import { assertTeamMember, AppError } from '../utils/teamGuard'
 import prisma from '../config/database'
 import { extractHtmlFromYjsState } from '../services/file.service'
+import { emitToTeam } from '../socket'
+import { SOCKET_EVENTS } from '../config/socketEvents'
+import { enforceLockOnActiveConnections } from '../collaboration/hocuspocus'
 
 // ---------------------------------------------------------------------------
 // Helper: parse and validate integer params
@@ -53,6 +56,7 @@ export async function createDocument(req: Request, res: Response): Promise<void>
             title: title?.trim() || 'Untitled Document',
             folderId: folderId ? parseInt(String(folderId), 10) : undefined,
         })
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_CREATED, { document: doc, createdBy: userId })
         res.status(201).json(doc)
     } catch (err: any) {
         if (err.message === 'FOLDER_NOT_FOUND') {
@@ -157,6 +161,7 @@ export async function renameDocument(req: Request, res: Response): Promise<void>
     try {
         await assertTeamMember(userId, teamId, 'editor')
         const updated = await DocumentService.renameDocument(docId, teamId, title)
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_RENAMED, { documentId: docId, newTitle: updated.title })
         res.json(updated)
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {
@@ -199,6 +204,7 @@ export async function deleteDocument(req: Request, res: Response): Promise<void>
         // If you want only admins to delete, change this to 'admin'.
         await assertTeamMember(userId, teamId, 'editor')
         await DocumentService.softDeleteDocument(docId, teamId)
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_DELETED, { documentId: docId })
         res.json({ success: true })
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {
@@ -228,6 +234,7 @@ export async function moveDocument(req: Request, res: Response): Promise<void> {
     try {
         await assertTeamMember(userId, teamId, 'editor')
         const updated = await DocumentService.moveDocument(docId, teamId, folderId === null ? null : parseInt(String(folderId), 10))
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_MOVED, { documentId: docId, targetFolderId: folderId === null ? null : parseInt(String(folderId), 10) })
         res.json(updated)
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {
@@ -310,6 +317,8 @@ export async function lockDocument(req: Request, res: Response): Promise<void> {
     try {
         await assertTeamMember(userId, teamId, 'editor')
         const updated = await DocumentService.lockDocument(docId, teamId, userId)
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_LOCKED, { documentId: docId, lockedBy: userId, expiresAt: updated.lockExpiresAt })
+        enforceLockOnActiveConnections(docId, userId)
         res.json(updated)
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {
@@ -341,6 +350,8 @@ export async function unlockDocument(req: Request, res: Response): Promise<void>
     try {
         await assertTeamMember(userId, teamId, 'editor')
         const updated = await DocumentService.unlockDocument(docId, teamId, userId)
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_UNLOCKED, { documentId: docId })
+        enforceLockOnActiveConnections(docId, null)
         res.json(updated)
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {
@@ -371,6 +382,8 @@ export async function forceUnlockDocument(req: Request, res: Response): Promise<
     try {
         await assertTeamMember(userId, teamId, 'admin')
         const updated = await DocumentService.forceUnlockDocument(docId, teamId)
+        emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_UNLOCKED, { documentId: docId })
+        enforceLockOnActiveConnections(docId, null)
         res.json({ success: true, ...updated })
     } catch (err: any) {
         if (err.message === 'DOCUMENT_NOT_FOUND') {

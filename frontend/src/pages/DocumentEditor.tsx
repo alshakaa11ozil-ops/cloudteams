@@ -41,6 +41,9 @@ import axios from 'axios'
 import { useAuth } from '../hooks/useAuth'
 import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
 import { exportToDocx } from '../utils/exportDocx'
+import { useTeamSocket } from '../hooks/useTeamSocket'
+import { SOCKET_EVENTS } from '../socketEvents'
+import toast from 'react-hot-toast'
 
 import VersionHistoryPanel from '../components/editor/VersionHistoryPanel'
 import ShareLinkModal from '../components/ShareLinkModal'
@@ -120,6 +123,65 @@ export default function DocumentEditor() {
   const [lockOwnerUserId, setLockOwnerUserId] = useState<number | null>(null)
   const [lockExpiresAt, setLockExpiresAt] = useState<string | null>(null)
   const [isLockLoading, setIsLockLoading] = useState(false)
+
+  const { socket } = useTeamSocket(teamId ? parseInt(teamId, 10) : undefined)
+
+  // --------------------------------------------------------------------------
+  // SOCKET: Real-time lock updates
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!socket || !docId) return
+
+    const handleLocked = (payload: any) => {
+      if (payload.documentId === parseInt(docId, 10)) {
+        setLockOwnerUserId(payload.lockedBy)
+        setLockExpiresAt(payload.expiresAt)
+        if (payload.lockedBy !== user?.id) {
+          toast.error('This document has been locked by another user. You are now in View-Only mode.', { duration: 5000 })
+        }
+      }
+    }
+
+    const handleUnlocked = (payload: any) => {
+      if (payload.documentId === parseInt(docId, 10)) {
+        if (lockOwnerUserId !== null && lockOwnerUserId !== user?.id) {
+          toast.success('Document unlocked. You can now edit.')
+        }
+        setLockOwnerUserId(null)
+        setLockExpiresAt(null)
+      }
+    }
+
+    socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
+    socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
+
+    return () => {
+      socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
+      socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
+    }
+  }, [socket, docId, user?.id, lockOwnerUserId])
+
+  // --------------------------------------------------------------------------
+  // TIMER: Auto-expire locks
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!lockExpiresAt) return
+
+    const checkExpiry = () => {
+      if (new Date(lockExpiresAt) <= new Date()) {
+        if (lockOwnerUserId !== null && lockOwnerUserId !== user?.id) {
+          toast.success('Document lock expired. You can now edit.')
+        }
+        setLockOwnerUserId(null)
+        setLockExpiresAt(null)
+      }
+    }
+
+    // Check immediately and then every 5 seconds
+    checkExpiry()
+    const interval = setInterval(checkExpiry, 5000)
+    return () => clearInterval(interval)
+  }, [lockExpiresAt, lockOwnerUserId, user?.id])
 
   // --------------------------------------------------------------------------
   // FETCH: Document metadata or file open-editor data

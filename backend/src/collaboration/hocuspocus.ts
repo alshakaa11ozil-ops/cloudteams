@@ -395,3 +395,24 @@ const collabServer = new Hocuspocus({
 })
 
 export default collabServer
+
+// ---------------------------------------------------------------------------
+// HELPER: enforceLockOnActiveConnections
+// ---------------------------------------------------------------------------
+// Called by the controller when a lock is established to instantly set readOnly 
+// mode on any active connections from other users without needing a DB query.
+// ---------------------------------------------------------------------------
+export function enforceLockOnActiveConnections(documentId: number, lockOwnerUserId: number | null) {
+    const targetName = `doc-${documentId}`
+    collabServer.connections.forEach((conn) => {
+        if (conn.documentName === targetName) {
+            if (lockOwnerUserId !== null && conn.context?.userId !== lockOwnerUserId) {
+                (conn.connection as any).readOnly = true
+                console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: connection set to readOnly for user ${conn.context?.userId}`)
+            } else {
+                (conn.connection as any).readOnly = false
+                console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: connection set to readWrite for user ${conn.context?.userId}`)
+            }
+        }
+    })
+}

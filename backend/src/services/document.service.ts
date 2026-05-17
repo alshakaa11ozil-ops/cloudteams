@@ -22,8 +22,7 @@
 // =============================================================================
 
 import prisma from '../config/database'
-import { emitToTeam } from '../socket'
-import { SOCKET_EVENTS } from '../config/socketEvents'
+
 
 // ---------------------------------------------------------------------------
 // TYPES
@@ -97,12 +96,6 @@ export async function createDocument(input: CreateDocumentInput) {
             created_at: true,
             updated_at: true,
         }
-    })
-
-    // Emit socket event to team so other users' UI updates in real-time
-    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_CREATED, {
-        document: doc,
-        createdBy
     })
 
     return doc
@@ -232,12 +225,6 @@ export async function renameDocument(
         select: { id: true, title: true }
     })
 
-    // Emit socket event
-    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_RENAMED, {
-        documentId: docId,
-        newTitle: updated.title
-    })
-
     return updated
 }
 
@@ -268,10 +255,6 @@ export async function softDeleteDocument(docId: number, teamId: number) {
         }
     })
 
-    // Emit socket event
-    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_DELETED, {
-        documentId: docId
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -295,12 +278,6 @@ export async function moveDocument(docId: number, teamId: number, targetFolderId
         where: { id: docId },
         data: { folder_id: targetFolderId },
         select: { id: true, folder_id: true }
-    })
-
-    // Emit socket event
-    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_MOVED, {
-        documentId: docId,
-        targetFolderId
     })
 
     return updated
@@ -332,13 +309,6 @@ export async function lockDocument(docId: number, teamId: number, userId: number
         select: { id: true, lockOwnerUserId: true, lockExpiresAt: true }
     })
 
-    // Emit socket event
-    emitToTeam(teamId, 'DOCUMENT_LOCKED', {
-        documentId: docId,
-        lockedBy: userId,
-        expiresAt
-    })
-
     return updated
 }
 
@@ -366,11 +336,6 @@ export async function unlockDocument(docId: number, teamId: number, userId: numb
         select: { id: true }
     })
 
-    // Emit socket event
-    emitToTeam(teamId, 'DOCUMENT_UNLOCKED', {
-        documentId: docId
-    })
-
     return updated
 }
 
@@ -394,6 +359,5 @@ export async function forceUnlockDocument(docId: number, teamId: number) {
         select: { id: true }
     })
 
-    emitToTeam(teamId, 'DOCUMENT_UNLOCKED', { documentId: docId })
     return updated
 }

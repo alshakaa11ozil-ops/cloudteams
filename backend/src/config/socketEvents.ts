@@ -41,7 +41,7 @@ export const SOCKET_EVENTS = {
     // ── Announcements ──────────────────────────────────────────────────────
     ANNOUNCEMENT_POSTED: 'announcement:posted',
     ANNOUNCEMENT_PINNED: 'announcement:pinned',
-    
+
     // ── Comments ──────────────────────────────────────────────────────────────
     COMMENT_CREATED: 'comment:created',
     COMMENT_RESOLVED: 'comment:resolved',
@@ -50,6 +50,8 @@ export const SOCKET_EVENTS = {
     DOCUMENT_RENAMED: 'document:renamed',
     DOCUMENT_DELETED: 'document:deleted',
     DOCUMENT_MOVED: 'document:moved',
+    DOCUMENT_LOCKED: 'document:locked',
+    DOCUMENT_UNLOCKED: 'document:unlocked',
 
 } as const
 

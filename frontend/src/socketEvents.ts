@@ -50,6 +50,8 @@ export const SOCKET_EVENTS = {
     DOCUMENT_RENAMED: 'document:renamed',
     DOCUMENT_DELETED: 'document:deleted',
     DOCUMENT_MOVED: 'document:moved',
+    DOCUMENT_LOCKED: 'document:locked',
+    DOCUMENT_UNLOCKED: 'document:unlocked',
 
 } as const
 

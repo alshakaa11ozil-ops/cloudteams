@@ -402,11 +402,21 @@ export default function FileBrowser() {
     socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleLockUpdate)
     socket.on(SOCKET_EVENTS.FILE_LOCK_EXPIRED, handleLockUpdate)
 
-    // ── Cleanup
+    const handleDocLockUpdate = (payload: { documentId: number }) => {
+      void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+    }
+
+    socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleDocLockUpdate)
+    socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleDocLockUpdate)
+
     return () => {
       socket.off(SOCKET_EVENTS.FILE_LOCKED, handleLockUpdate)
       socket.off(SOCKET_EVENTS.FILE_UNLOCKED, handleLockUpdate)
       socket.off(SOCKET_EVENTS.FILE_LOCK_EXPIRED, handleLockUpdate)
+
+      socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleDocLockUpdate)
+      socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleDocLockUpdate)
+
       socket.emit('leave-team', { teamId })
       socket.disconnect()
     }
@@ -805,11 +815,18 @@ export default function FileBrowser() {
                     onDoubleClick={() => navigate(`/teams/${teamId}/documents/${doc.id}`)}
                   >
                     {/* Document icon */}
-                    <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center mb-3 mx-auto">
+                    <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center mb-3 mx-auto relative">
                       <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
+                      {doc.lockOwnerUserId && (
+                        <div className="absolute -bottom-1 -right-1 bg-amber-100 text-amber-600 rounded-full p-0.5 shadow-sm border border-white" title="Locked">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                          </svg>
+                        </div>
+                      )}
                     </div>
 
                     {/* Title */}
