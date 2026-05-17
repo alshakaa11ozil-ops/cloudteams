@@ -23,8 +23,8 @@ export interface GeminiResult {
 // evenly across both keys, doubling the effective per-minute quota.
 let _keyIndex = 0
 function pickApiKey(): { primary: string; backup: string | null } {
-    const key1 = process.env.GEMINI_API_KEY ?? ''
-    const key2 = process.env.GEMINI_API_KEY2 ?? null
+    const key1 = (process.env.GEMINI_API_KEY || '').trim()
+    const key2 = (process.env.GEMINI_API_KEY2 || '').trim()
     if (!key2) return { primary: key1, backup: null }
     // Alternate between keys on successive calls
     const usePrimary = (_keyIndex++ % 2) === 0

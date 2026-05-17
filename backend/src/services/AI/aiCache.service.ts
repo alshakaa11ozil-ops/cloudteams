@@ -20,6 +20,7 @@ export const AI_COOLDOWNS = {
     digest: 6 * 60 * 60 * 1000,          // 6 hours  — team digest
     file_summary: 24 * 60 * 60 * 1000,   // 24 hours — file content rarely changes
     duplicate_explain: 30 * 60 * 1000,   // 30 min   — prevents rate spikes on repeated uploads
+    analytics_summary: 6 * 60 * 60 * 1000, // 6 hours — team analytics
 } as const
 
 export type AiFeature = keyof typeof AI_COOLDOWNS

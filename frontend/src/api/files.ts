@@ -500,7 +500,6 @@ export async function searchFiles(
     sortBy?: 'name' | 'date' | 'size';
     order?: 'asc' | 'desc';
     type?: 'files' | 'folders' | 'all';
-    smart?: boolean;
   }
 ): Promise<{ files: CloudFile[]; folders: Folder[]; documents: DocumentSummary[] }> {
   const params: Record<string, string> = { teamId: String(teamId), query, type: options?.type || 'all' }
@@ -509,7 +508,6 @@ export async function searchFiles(
   if (options?.folderId !== undefined) params.folderId = String(options.folderId)
   if (options?.sortBy) params.sortBy = options.sortBy
   if (options?.order) params.order = options.order
-  if (options?.smart) params.smart = 'true'
 
   const res = await api.get('/search', { params })
 

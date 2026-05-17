@@ -3,7 +3,6 @@
 import { Request, Response } from 'express';
 import { searchTeamContent } from '../services/search.service';
 import { AppError } from '../utils/teamGuard';
-import { parseSmartQuery } from '../services/AI/smartSearch.service';
 // ─────────────────────────────────────────────
 // CONTROLLER: searchHandler
 // Route: GET /api/search?query=...&teamId=...&type=...&since=...
@@ -68,14 +67,6 @@ export async function searchHandler(req: Request, res: Response) {
         
         let mimeType = mimeTypeRaw as string | undefined;
         let finalQuery = queryStr;
-
-        // --- SMART SEARCH INTERCEPTION ---
-        if (req.query.smart === 'true') {
-            const smartParams = await parseSmartQuery(finalQuery, teamId, userId);
-            finalQuery = smartParams.query;
-            if (smartParams.mimeType) mimeType = smartParams.mimeType;
-            if (smartParams.uploadedBy) uploadedBy = smartParams.uploadedBy;
-        }
 
         let folderId: number | null | undefined;
         if (folderIdRaw !== undefined) {

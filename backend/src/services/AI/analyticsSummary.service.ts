@@ -1,7 +1,17 @@
 import { callGemini } from './gemini';
 import { getTeamAnalytics } from '../analytics.service';
+import { getCachedResult, setCachedResult } from './aiCache.service';
 
-export async function generateAnalyticsSummary(teamId: number, startDate?: string, endDate?: string): Promise<string> {
+export async function generateAnalyticsSummary(teamId: number, startDate?: string, endDate?: string, force = false): Promise<string> {
+    const useCache = !startDate && !endDate;
+
+    if (useCache && !force) {
+        const cached = await getCachedResult(teamId, 'analytics_summary', null);
+        if (cached) {
+            return cached.result;
+        }
+    }
+
     // 1. Fetch raw analytics data
     const data = await getTeamAnalytics(teamId, startDate, endDate);
 
@@ -33,6 +43,9 @@ ${JSON.stringify(contextData, null, 2)}`;
     // temperature: 0.5 makes it read naturally
     try {
         const summary = await callGemini(prompt, 500, { temperature: 0.5 });
+        if (useCache) {
+            await setCachedResult(teamId, 'analytics_summary', null, summary);
+        }
         return summary;
     } catch (error) {
         console.error('[generateAnalyticsSummary] AI error, using heuristic fallback:', error);

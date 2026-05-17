@@ -96,11 +96,9 @@ export default function FileBrowser() {
     folderId?: number | null;
     sortBy: 'name' | 'date' | 'size';
     order: 'asc' | 'desc';
-    smart?: boolean;
   }>({
     sortBy: 'date',
-    order: 'desc',
-    smart: false
+    order: 'desc'
   })
 
 
@@ -541,20 +539,6 @@ export default function FileBrowser() {
                 "
               />
             </div>
-            
-            {/* Smart Search Toggle */}
-            <button
-              onClick={() => setSearchOptions(prev => ({ ...prev, smart: !prev.smart }))}
-              className={`
-                p-1.5 rounded-lg border transition-all flex items-center gap-1.5
-                ${searchOptions.smart 
-                  ? 'bg-indigo-50 border-indigo-200 text-indigo-600' 
-                  : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}
-              `}
-              title="AI Smart Search"
-            >
-              <SparklesIcon className="w-4 h-4" />
-            </button>
             
             {/* Filter Toggle */}
             <Popover className="relative">
