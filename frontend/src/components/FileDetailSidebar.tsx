@@ -18,6 +18,8 @@ import { format } from 'date-fns'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import DOMPurify from 'dompurify'
+import socket from '../api/socket'
+import { SOCKET_EVENTS } from '../socketEvents'
 import {
   fetchLockStatus, fetchComments, addComment, editComment, deleteComment,
   fetchVersions, restoreVersion, fetchFilePreviewBlob, lockFile,
@@ -157,6 +159,34 @@ export default function FileDetailSidebar({
       }
     }
   }, [file?.id, file?.updated_at, file?.mime_type, activeTab, teamId])
+
+  // ── Listen to socket events for auto-refresh ───────────────────────────────
+  useEffect(() => {
+    if (!socket || !teamId || !file?.id) return
+
+    const invalidateLock = (payload: any) => {
+      if (payload.fileId === file.id) {
+        void queryClient.invalidateQueries({ queryKey: ['lock-status', teamId, file.id] })
+        void queryClient.invalidateQueries({ queryKey: ['files', teamId] })
+      }
+    }
+
+    const invalidateVersions = (payload: any) => {
+      if (payload.fileId === file.id) {
+        void queryClient.invalidateQueries({ queryKey: ['versions', teamId, file.id] })
+      }
+    }
+
+    socket.on(SOCKET_EVENTS.FILE_LOCKED, invalidateLock)
+    socket.on(SOCKET_EVENTS.FILE_UNLOCKED, invalidateLock)
+    socket.on(SOCKET_EVENTS.FILE_VERSION_CREATED, invalidateVersions)
+
+    return () => {
+      socket.off(SOCKET_EVENTS.FILE_LOCKED, invalidateLock)
+      socket.off(SOCKET_EVENTS.FILE_UNLOCKED, invalidateLock)
+      socket.off(SOCKET_EVENTS.FILE_VERSION_CREATED, invalidateVersions)
+    }
+  }, [socket, teamId, file?.id, queryClient])
 
   // ── Queries ───────────────────────────────────────────────────────────────
 

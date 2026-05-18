@@ -16,6 +16,7 @@ export const SOCKET_EVENTS = {
     FILE_RESTORED: 'file:restored',    // restored from recycle bin
     FILE_RENAMED: 'file:renamed',     // file name changed
     FILE_MOVED: 'file:moved',       // moved to different folder
+    FILE_VERSION_CREATED: 'file:versionCreated', // new version explicitly saved
 
     // ── Folders ────────────────────────────────────────────────────────────
     FOLDER_CREATED: 'folder:created',
@@ -50,6 +51,7 @@ export const SOCKET_EVENTS = {
     DOCUMENT_RENAMED: 'document:renamed',
     DOCUMENT_DELETED: 'document:deleted',
     DOCUMENT_MOVED: 'document:moved',
+    DOCUMENT_VERSION_CREATED: 'document:versionCreated',
     DOCUMENT_LOCKED: 'document:locked',
     DOCUMENT_UNLOCKED: 'document:unlocked',
 

@@ -40,6 +40,11 @@ export async function createDocumentVersion(input: CreateDocumentVersionInput) {
         }
     })
 
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, {
+        documentId: version.document_id,
+        versionId: version.id
+    })
+
     return {
         id: version.id,
         documentId: version.document_id,

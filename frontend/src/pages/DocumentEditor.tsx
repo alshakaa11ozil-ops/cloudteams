@@ -128,10 +128,14 @@ export default function DocumentEditor() {
   // SOCKET: Real-time lock updates
   // --------------------------------------------------------------------------
   useEffect(() => {
-    if (!socket || !docId) return
+    if (!socket || (!docId && !fileId)) return
 
     const handleLocked = (payload: any) => {
-      if (payload.documentId === parseInt(docId, 10)) {
+      // Check both documentId and fileId depending on mode
+      if (
+        (mode === 'document' && payload.documentId === parseInt(docId!, 10)) ||
+        (mode === 'file' && payload.fileId === parseInt(fileId!, 10))
+      ) {
         setLockOwnerUserId(payload.lockedBy)
         setLockExpiresAt(payload.expiresAt)
         if (payload.lockedBy !== user?.id) {
@@ -141,7 +145,10 @@ export default function DocumentEditor() {
     }
 
     const handleUnlocked = (payload: any) => {
-      if (payload.documentId === parseInt(docId, 10)) {
+      if (
+        (mode === 'document' && payload.documentId === parseInt(docId!, 10)) ||
+        (mode === 'file' && payload.fileId === parseInt(fileId!, 10))
+      ) {
         if (lockOwnerUserId !== null && lockOwnerUserId !== user?.id) {
           toast.success('Document unlocked. You can now edit.')
         }
@@ -152,12 +159,16 @@ export default function DocumentEditor() {
 
     socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
     socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
+    socket.on(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
+    socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
 
     return () => {
       socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
       socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
+      socket.off(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
+      socket.off(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
     }
-  }, [socket, docId, user?.id, lockOwnerUserId])
+  }, [socket, docId, fileId, mode, user?.id, lockOwnerUserId])
 
   // --------------------------------------------------------------------------
   // TIMER: Auto-expire locks
@@ -448,7 +459,7 @@ export default function DocumentEditor() {
           ) : (
             <span
               onClick={() => {
-                if (mode === 'document' && !isSavingTitle) {
+                if (mode === 'document' && !isSavingTitle && !isLockedByOther) {
                   setIsEditingTitle(true)
                   setEditTitle(title)
                 }
@@ -466,7 +477,7 @@ export default function DocumentEditor() {
 
         {/* Right side — Share, Export, and History buttons */}
         <div className="flex items-center gap-2">
-          {mode === 'document' && (
+          {mode === 'document' && !isLockedByOther && (
             <div className="flex items-center gap-1 bg-slate-700/50 p-1 rounded-lg">
               <button
                 onClick={() => setIsShareModalOpen(true)}
@@ -545,7 +556,7 @@ export default function DocumentEditor() {
             </div>
           )}
 
-          {mode === 'document' && (
+          {mode === 'document' && !isLockedByOther && (
             <button
               onClick={() => setShowHistory(!showHistory)}
               className={`
@@ -560,23 +571,25 @@ export default function DocumentEditor() {
             </button>
           )}
 
-          <button
-            onClick={handleExport}
-            disabled={isExporting || loadState !== 'connected'}
-            title="Export as .docx"
-            className="
-            flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-            text-slate-400 hover:text-white hover:bg-slate-700
-            disabled:opacity-40 disabled:cursor-not-allowed
-            transition-colors
-          "
-          >
+          {!isLockedByOther && (
+            <button
+              onClick={handleExport}
+              disabled={isExporting || loadState !== 'connected'}
+              title="Export as .docx"
+              className="
+              flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+              text-slate-400 hover:text-white hover:bg-slate-700
+              disabled:opacity-40 disabled:cursor-not-allowed
+              transition-colors
+            "
+            >
             {isExporting
               ? <Loader2 size={14} className="animate-spin" />
               : <Download size={14} />
             }
-            <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
-          </button>
+              <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
+            </button>
+          )}
         </div>
       </header>
 

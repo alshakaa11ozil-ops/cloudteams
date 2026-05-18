@@ -156,6 +156,28 @@ export default function FileBrowser() {
     staleTime: 30_000,
   })
 
+  // Listen to lock socket events to auto-refresh the file list
+  useEffect(() => {
+    if (!socket || !teamId) return
+
+    const invalidateData = () => {
+      void queryClient.invalidateQueries({ queryKey: ['files', teamId] })
+      void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
+    }
+
+    socket.on(SOCKET_EVENTS.FILE_LOCKED, invalidateData)
+    socket.on(SOCKET_EVENTS.FILE_UNLOCKED, invalidateData)
+    socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, invalidateData)
+    socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, invalidateData)
+
+    return () => {
+      socket.off(SOCKET_EVENTS.FILE_LOCKED, invalidateData)
+      socket.off(SOCKET_EVENTS.FILE_UNLOCKED, invalidateData)
+      socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, invalidateData)
+      socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, invalidateData)
+    }
+  }, [socket, teamId, queryClient])
+
   // Memoize document processing so they respect UI filters and sorts
   const processedDocuments = useMemo(() => {
     if (!documentsQuery.data) return []
@@ -844,7 +866,7 @@ export default function FileBrowser() {
                     )}
 
                     {/* Options overlay — editor+ only */}
-                    {(teamQuery.data?.myRole === 'admin' || teamQuery.data?.myRole === 'editor') && (
+                    {(teamQuery.data?.myRole === 'admin' || teamQuery.data?.myRole === 'editor') && !(doc.lockOwnerUserId && doc.lockOwnerUserId !== user?.id) && (
                       <div className="
                         absolute top-1 right-1 flex items-center gap-0.5
                         opacity-0 group-hover:opacity-100 transition-opacity

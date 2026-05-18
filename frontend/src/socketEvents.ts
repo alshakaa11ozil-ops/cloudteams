@@ -16,6 +16,8 @@ export const SOCKET_EVENTS = {
     FILE_RESTORED: 'file:restored',    // restored from recycle bin
     FILE_RENAMED: 'file:renamed',     // file name changed
     FILE_MOVED: 'file:moved',       // moved to different folder
+    FILE_VERSION_CREATED: 'file:versionCreated', // added for files
+
 
     // ── Folders ────────────────────────────────────────────────────────────
     FOLDER_CREATED: 'folder:created',
@@ -41,7 +43,7 @@ export const SOCKET_EVENTS = {
     // ── Announcements ──────────────────────────────────────────────────────
     ANNOUNCEMENT_POSTED: 'announcement:posted',
     ANNOUNCEMENT_PINNED: 'announcement:pinned',
-    
+
     // ── Comments ──────────────────────────────────────────────────────────────
     COMMENT_CREATED: 'comment:created',
     COMMENT_RESOLVED: 'comment:resolved',
@@ -52,6 +54,7 @@ export const SOCKET_EVENTS = {
     DOCUMENT_MOVED: 'document:moved',
     DOCUMENT_LOCKED: 'document:locked',
     DOCUMENT_UNLOCKED: 'document:unlocked',
+    DOCUMENT_VERSION_CREATED: 'document:versionCreated',   // 👈 ADD THIS
 
 } as const
 

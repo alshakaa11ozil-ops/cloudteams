@@ -11,6 +11,8 @@ import prisma from '../config/database';
 import { Prisma } from '@prisma/client';
 import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity } from '../utils/activityLogger';
+import { emitToTeam } from '../socket';
+import { SOCKET_EVENTS } from '../config/socketEvents';
 
 // Internal helper — snapshot current file state into file_versions table
 // Called BEFORE any overwrite so we never lose a version.
@@ -137,6 +139,11 @@ export const saveFileVersion = async (
             file_name: file.original_name,
             ...(versionName ? { version_name: versionName } : {}),
         },
+    });
+
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_VERSION_CREATED, {
+        fileId: file.id,
+        versionId: version.id
     });
 
     return { ...version, version_name: versionName ?? null };

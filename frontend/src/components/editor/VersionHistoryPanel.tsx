@@ -3,6 +3,8 @@ import { History, X, Clock, Loader2, RotateCcw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { fetchDocumentVersions, createDocumentVersion, restoreDocumentVersion } from '../../api/documents'
 import type { DocumentVersion } from '../../api/documents'
+import socket from '../../api/socket'
+import { SOCKET_EVENTS } from '../../socketEvents'
 
 interface VersionHistoryPanelProps {
   teamId: string
@@ -23,6 +25,21 @@ export default function VersionHistoryPanel({ teamId, docId, onClose }: VersionH
   useEffect(() => {
     loadVersions()
   }, [teamId, docId])
+
+  useEffect(() => {
+    if (!socket || !docId) return
+
+    const handleVersionCreated = (payload: any) => {
+      if (payload.documentId === parseInt(docId, 10)) {
+        loadVersions()
+      }
+    }
+
+    socket.on(SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, handleVersionCreated)
+    return () => {
+      socket.off(SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, handleVersionCreated)
+    }
+  }, [socket, docId])
 
   const loadVersions = async () => {
     setIsLoading(true)
