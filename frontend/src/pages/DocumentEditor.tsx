@@ -40,6 +40,7 @@ import type { AxiosError } from 'axios'
 import axios from 'axios'
 import { useAuth } from '../hooks/useAuth'
 import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
+import { unlockFile } from '../api/files'
 import { exportToDocx } from '../utils/exportDocx'
 import socket from '../api/socket'
 import { SOCKET_EVENTS } from '../socketEvents'
@@ -124,14 +125,23 @@ export default function DocumentEditor() {
   const [lockExpiresAt, setLockExpiresAt] = useState<string | null>(null)
   const [isLockLoading, setIsLockLoading] = useState(false)
 
+  // ── File lock token (for file editing mode) ────────────────────────────────
+  // Stored in sessionStorage so it survives a hard refresh; cleared on unmount.
+  const fileLockTokenRef = useRef<string | null>(
+    fileId ? sessionStorage.getItem(`cloudteams_file_lock_${fileId}`) : null
+  )
+
+  // ── Editor key — bump to force remount after version restore ───────────────
+  const [editorKey, setEditorKey] = useState(0)
+
+
   // --------------------------------------------------------------------------
-  // SOCKET: Real-time lock updates
+  // SOCKET: Real-time lock updates + version restore
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (!socket || (!docId && !fileId)) return
 
     const handleLocked = (payload: any) => {
-      // Check both documentId and fileId depending on mode
       if (
         (mode === 'document' && payload.documentId === parseInt(docId!, 10)) ||
         (mode === 'file' && payload.fileId === parseInt(fileId!, 10))
@@ -157,16 +167,29 @@ export default function DocumentEditor() {
       }
     }
 
+    // DOCUMENT_RESTORED: server kicked all connections (forceReconnectDocument).
+    // The provider will reconnect automatically and fetch the restored state.
+    // We bump editorKey to force a clean remount of CollaborativeEditor.
+    const handleRestored = (payload: any) => {
+      if (mode === 'document' && payload.documentId === parseInt(docId!, 10)) {
+        toast.success('A previous version has been restored. Reloading document...', { duration: 4000 })
+        // Small delay so the server has time to finish forceReconnect
+        setTimeout(() => setEditorKey(k => k + 1), 800)
+      }
+    }
+
     socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
     socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
     socket.on(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
     socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
+    socket.on(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
 
     return () => {
       socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
       socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
       socket.off(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
       socket.off(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
+      socket.off(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
     }
   }, [socket, docId, fileId, mode, user?.id, lockOwnerUserId])
 
@@ -266,6 +289,43 @@ export default function DocumentEditor() {
 
     fetchEditorData()
   }, [teamId, fileId, docId, mode, resourceId])
+
+  // --------------------------------------------------------------------------
+  // EFFECT: Auto-release file lock on navigate / tab close (Bug 3 fix)
+  // --------------------------------------------------------------------------
+  // Files use an explicit lockToken unlike documents (which use lockOwnerUserId).
+  // We store the token in both state and a ref so the cleanup function and the
+  // beforeunload handler can read the latest value without stale closure issues.
+  useEffect(() => {
+    if (mode !== 'file' || !fileId || !teamId) return
+
+    const releaseFileLock = () => {
+      const token = fileLockTokenRef.current
+      if (!token) return
+      // Use sendBeacon for tab-close: it fires even after the page unloads.
+      // Fall back to fetch for navigation-away (still in-page).
+      const url = `${import.meta.env.VITE_API_URL}/files/${fileId}/unlock`
+      const body = JSON.stringify({ lockToken: token })
+      const jwt = localStorage.getItem('cloudteams_token') ?? ''
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: 'application/json' })
+        navigator.sendBeacon(url + `?token=${encodeURIComponent(token)}&jwt=${encodeURIComponent(jwt)}`, blob)
+      } else {
+        // Synchronous XHR fallback (deprecated but still works in some browsers)
+        void unlockFile(parseInt(teamId!), parseInt(fileId!), token).catch(() => {})
+      }
+      fileLockTokenRef.current = null
+      sessionStorage.removeItem(`cloudteams_file_lock_${fileId}`)
+    }
+
+    const onBeforeUnload = () => releaseFileLock()
+    window.addEventListener('beforeunload', onBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      releaseFileLock() // also release on React navigation (SPA routing)
+    }
+  }, [mode, fileId, teamId])
 
   // --------------------------------------------------------------------------
   // HANDLER: Save title on blur (Addition 1 — inline title editing)
@@ -597,6 +657,7 @@ export default function DocumentEditor() {
       <div className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden">
           <CollaborativeEditor
+            key={editorKey}
             documentName={documentName}
             initialContent={initialContent}
             onReady={() => setLoadState('connected')}

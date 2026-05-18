@@ -78,7 +78,9 @@ export default function VersionHistoryPanel({ teamId, docId, onClose }: VersionH
     setError(null)
     try {
       await restoreDocumentVersion(teamId, docId, versionId)
-      // The backend emits a socket event to reload the document state in CollaborativeEditor
+      // The backend emits a socket event (DOCUMENT_RESTORED) to force 
+      // CollaborativeEditor to remount and load the new yjs_state.
+      // We don't need to manually reload the page anymore.
       onClose()
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to restore version')

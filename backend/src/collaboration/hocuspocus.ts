@@ -149,10 +149,6 @@ const collabServer = new Hocuspocus({
                 throw new Error(`Document ${id} not found or deleted`)
             }
             teamId = doc.team_id
-            // NOTE: We do NOT set readOnly here even if the doc is locked.
-            // Doing so prevents Hocuspocus from syncing document content to the
-            // user, resulting in a blank editor. Lock enforcement is done in
-            // onChange (below) which rejects writes without blocking content reads.
             if (doc.lockExpiresAt && doc.lockExpiresAt > new Date() && doc.lockOwnerUserId !== payload.userId) {
                 isLockedForUser = true
             }
@@ -182,6 +178,24 @@ const collabServer = new Hocuspocus({
             throw e
         }
 
+        // BUG FIX: Set connection.readOnly = true for locked-out users.
+        //
+        // BEFORE: We did NOT set readOnly here, with a comment saying it prevents
+        //   content delivery. This was wrong — Hocuspocus v4 CAN deliver content
+        //   to readOnly connections. NOT setting it caused the real bug:
+        //   The initial CRDT merge when a user joins a room triggers onChange.
+        //   onChange detected the lock and threw, disconnecting the user with
+        //   "permission-denied" → blank editor + auth failed toast.
+        //
+        // AFTER: Setting readOnly = true here means:
+        //   1. Hocuspocus still delivers full document state to the client (READ ✅)
+        //   2. onChange is never called for this connection (writes blocked ✅)
+        //   3. No disconnect, no blank editor, no spurious auth error toast ✅
+        if (isLockedForUser) {
+            ;(data as any).connection.readOnly = true
+            console.log(`[Hocuspocus] 🔒 Connection set to readOnly for locked-out user ${payload.userId}`)
+        }
+
         console.log(`[Hocuspocus] ✅ Auth SUCCESS for "${documentName}" (isLockedForUser=${isLockedForUser})\n`)
 
         // Return context — available in store/onChange/onDisconnect as data.context
@@ -190,6 +204,7 @@ const collabServer = new Hocuspocus({
             teamId,
             documentType: type,
             documentId: id,
+            isReadOnly: isLockedForUser,
         }
     },
 
@@ -207,11 +222,16 @@ const collabServer = new Hocuspocus({
         const key = userId ? `${userId}:${data.documentName}` : null
         if (!key) return
 
-        // ── Lock enforcement ────────────────────────────────────────────────
-        // Check if document is locked by someone else. If so, reject this write.
-        // We check on every change to catch cases where lock was acquired AFTER
-        // the user connected (enforceLockOnActiveConnections covers the live case
-        // but a DB check here is the definitive server-side gate).
+        // ── Lock enforcement (soft — backup for runtime lock changes) ──────
+        // onAuthenticate already sets readOnly=true for users locked out AT
+        // connect time. This handles the edge case where a lock is acquired
+        // AFTER the user connected (onAuthenticate can't catch that).
+        //
+        // NOTE: We do NOT throw here anymore. Throwing caused Hocuspocus to
+        // disconnect the user entirely ("permission-denied" reason), which
+        // produced a blank editor for read-only viewers. Instead we mark the
+        // connection readOnly and log a warning. The readOnly flag prevents
+        // this and future changes from being applied.
         try {
             const { type, id } = parseDocumentName(data.documentName)
             if (type === 'doc') {
@@ -225,13 +245,14 @@ const collabServer = new Hocuspocus({
                     doc.lockOwnerUserId !== null &&
                     doc.lockOwnerUserId !== userId
                 ) {
-                    console.warn(`[Hocuspocus] 🔒 Write REJECTED — doc ${id} is locked by user ${doc.lockOwnerUserId}, change from user ${userId}`)
-                    throw new Error('Document is locked for editing by another user')
+                    console.warn(`[Hocuspocus] 🔒 Write BLOCKED (soft) — doc ${id} is locked by user ${doc.lockOwnerUserId}, change from user ${userId}`)
+                    // Mark connection readOnly so future writes are also blocked
+                    ;(data as any).connection.readOnly = true
+                    return // drop this change without disconnecting
                 }
             }
             // File-level lock is handled by the lock.service.ts (separate flow)
         } catch (lockErr: any) {
-            if (lockErr.message === 'Document is locked for editing by another user') throw lockErr
             // Prisma/parse error — don't block the write, just log
             console.error(`[Hocuspocus] ⚠️ Lock check error (non-blocking):`, lockErr.message)
         }
@@ -438,23 +459,68 @@ export function enforceLockOnActiveConnections(documentId: number, lockOwnerUser
     const document = collabServer.documents.get(targetName)
     if (!document) return
 
-    // NOTE on Map.forEach signature: forEach(callbackFn(value, key))
-    // In Hocuspocus v4, document.connections is Map<Connection, ConnectionContext>
-    //   → first param (conn) is the Connection object
-    //   → second param (context) is the ConnectionContext with userId
-    // Previous code had (_, conn) which was reversed — readOnly was being set
-    // on the key (connection) but context was read from the wrong variable.
-    document.connections.forEach((conn: any, context: any) => {
-        const connUserId = context?.userId ?? conn?.context?.userId
-        if (lockOwnerUserId !== null && connUserId !== lockOwnerUserId) {
-            // Best-effort: try both possible shapes for the connection's readOnly flag
-            if (conn?.readOnly !== undefined) conn.readOnly = true
-            if (conn?.connection) (conn.connection as any).readOnly = true
-            console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: set readOnly for user ${connUserId}`)
-        } else {
-            if (conn?.readOnly !== undefined) conn.readOnly = false
-            if (conn?.connection) (conn.connection as any).readOnly = false
-            console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: set readWrite for user ${connUserId}`)
+    // Map<K, V>.forEach(callback(value, key)) — be explicit about which is which.
+    // Hocuspocus v4 document.connections shape is not fully typed, so we iterate
+    // over both the key and value and try all known shapes for the connection object
+    // and context object to be resilient to internal API changes.
+    document.connections.forEach((valueOrKey: any, keyOrValue: any) => {
+        // Try to find userId from both directions (handle Map<Connection,Context> or Map<Context,Connection>)
+        const userId1 = valueOrKey?.context?.userId ?? valueOrKey?.userId
+        const userId2 = keyOrValue?.context?.userId ?? keyOrValue?.userId
+        const connUserId = userId1 ?? userId2
+
+        const shouldBeReadOnly = lockOwnerUserId !== null && connUserId !== lockOwnerUserId
+
+        // Set readOnly on whichever object has the property
+        for (const obj of [valueOrKey, keyOrValue, valueOrKey?.connection, keyOrValue?.connection]) {
+            if (obj && typeof obj === 'object' && 'readOnly' in obj) {
+                obj.readOnly = shouldBeReadOnly
+            }
+        }
+
+        console.log(
+            `[Hocuspocus] ${shouldBeReadOnly ? '🔒' : '🔓'} Live Lock Enforcement: ` +
+            `user ${connUserId} → readOnly=${shouldBeReadOnly}`
+        )
+    })
+}
+
+// ---------------------------------------------------------------------------
+// HELPER: forceReconnectDocument
+// ---------------------------------------------------------------------------
+// Called after version restore to kick all active connections for a document.
+// Hocuspocus clients automatically reconnect and fetch the restored yjs_state
+// from the DB — this is the only reliable way to apply a version restore while
+// the document is open in editors.
+// ---------------------------------------------------------------------------
+export function forceReconnectDocument(documentId: number): void {
+    const targetName = `doc-${documentId}`
+    const document = collabServer.documents.get(targetName)
+    if (!document) {
+        console.log(`[Hocuspocus] forceReconnectDocument: doc-${documentId} not in memory, nothing to do`)
+        return
+    }
+
+    console.log(`[Hocuspocus] 🔄 forceReconnectDocument: closing all connections for doc-${documentId}`)
+
+    // Collect connections first (iterating while mutating is unsafe)
+    const connectionsToClose: any[] = []
+    document.connections.forEach((valueOrKey: any, keyOrValue: any) => {
+        for (const obj of [valueOrKey, keyOrValue]) {
+            if (obj && typeof obj === 'object' && typeof obj.close === 'function') {
+                connectionsToClose.push(obj)
+                break
+            }
         }
     })
+
+    for (const conn of connectionsToClose) {
+        try {
+            conn.close()
+        } catch (e: any) {
+            console.warn(`[Hocuspocus] forceReconnectDocument: close() failed:`, e.message)
+        }
+    }
+
+    console.log(`[Hocuspocus] ✅ forceReconnectDocument: closed ${connectionsToClose.length} connection(s) for doc-${documentId}`)
 }

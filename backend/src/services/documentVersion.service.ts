@@ -1,6 +1,7 @@
 import prisma from '../config/database'
 import { emitToTeam } from '../socket'
 import { SOCKET_EVENTS } from '../config/socketEvents'
+import { forceReconnectDocument } from '../collaboration/hocuspocus'
 
 export interface CreateDocumentVersionInput {
     documentId: number
@@ -100,7 +101,7 @@ export async function restoreDocumentVersion(documentId: number, versionId: numb
     })
     if (!version) throw new Error('VERSION_NOT_FOUND')
 
-    // Restore the yjs_state of the document
+    // Restore the yjs_state of the document in the DB
     await prisma.documents.update({
         where: { id: documentId },
         data: {
@@ -110,11 +111,16 @@ export async function restoreDocumentVersion(documentId: number, versionId: numb
         }
     })
 
-    // To make sure all connected clients reload the new yjs_state,
-    // we need to tell them. Emitting a socket event works well for this.
-    emitToTeam(teamId, 'document:restored', {
+    // Kick all currently connected editors so they reconnect and load the
+    // restored state fresh from DB. Without this, connected editors keep the
+    // old in-memory state and their next keystroke overwrites the restore.
+    forceReconnectDocument(documentId)
+
+    // Notify all team members so UIs can show a toast/banner
+    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_RESTORED, {
         documentId,
-        versionId
+        versionId,
+        restoredBy: userId
     })
 
     return { success: true }

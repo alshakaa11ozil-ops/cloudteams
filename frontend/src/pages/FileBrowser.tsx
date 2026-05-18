@@ -414,29 +414,78 @@ export default function FileBrowser() {
     socket.connect()
     socket.emit('join-team', { teamId })
 
-    // ── Handle remote locks (Week 8)
-    const handleLockUpdate = (payload: { fileId: number }) => {
-      void queryClient.invalidateQueries({ queryKey: ['lock-status', teamId, payload.fileId] })
+    // Invalidators — grouped by what data they affect
+    const invalidateFiles = () => {
+      void queryClient.invalidateQueries({ queryKey: ['files', teamId] })
     }
-
-    socket.on(SOCKET_EVENTS.FILE_LOCKED, handleLockUpdate)
-    socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleLockUpdate)
-    socket.on(SOCKET_EVENTS.FILE_LOCK_EXPIRED, handleLockUpdate)
-
-    const handleDocLockUpdate = () => {
+    const invalidateFolders = () => {
+      void queryClient.invalidateQueries({ queryKey: ['folders', teamId] })
+    }
+    const invalidateDocs = () => {
       void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
     }
+    const invalidateAll = () => {
+      invalidateFiles()
+      invalidateFolders()
+      invalidateDocs()
+    }
+    const invalidateLockStatus = (payload: { fileId?: number }) => {
+      if (payload?.fileId) {
+        void queryClient.invalidateQueries({ queryKey: ['lock-status', teamId, payload.fileId] })
+      }
+      invalidateFiles()
+    }
+    const invalidateDocLockStatus = () => {
+      invalidateDocs()
+    }
 
-    socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleDocLockUpdate)
-    socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleDocLockUpdate)
+    // ── File events ──────────────────────────────────────────────────
+    socket.on(SOCKET_EVENTS.FILE_UPLOADED,      invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_DELETED,       invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_RESTORED,      invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_RENAMED,       invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_MOVED,         invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_VERSION_CREATED, invalidateFiles)
+    socket.on(SOCKET_EVENTS.FILE_LOCKED,        invalidateLockStatus)
+    socket.on(SOCKET_EVENTS.FILE_UNLOCKED,      invalidateLockStatus)
+    socket.on(SOCKET_EVENTS.FILE_LOCK_EXPIRED,  invalidateLockStatus)
+
+    // ── Folder events ────────────────────────────────────────────────
+    socket.on(SOCKET_EVENTS.FOLDER_CREATED, invalidateFolders)
+    socket.on(SOCKET_EVENTS.FOLDER_RENAMED, invalidateFolders)
+    socket.on(SOCKET_EVENTS.FOLDER_DELETED, invalidateAll)   // files may have moved
+    socket.on(SOCKET_EVENTS.FOLDER_MOVED,   invalidateFolders)
+
+    // ── Document events ──────────────────────────────────────────────
+    socket.on(SOCKET_EVENTS.DOCUMENT_CREATED,  invalidateDocs)
+    socket.on(SOCKET_EVENTS.DOCUMENT_RENAMED,  invalidateDocs)
+    socket.on(SOCKET_EVENTS.DOCUMENT_DELETED,  invalidateDocs)
+    socket.on(SOCKET_EVENTS.DOCUMENT_MOVED,    invalidateDocs)
+    socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED,   invalidateDocLockStatus)
+    socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, invalidateDocLockStatus)
 
     return () => {
-      socket.off(SOCKET_EVENTS.FILE_LOCKED, handleLockUpdate)
-      socket.off(SOCKET_EVENTS.FILE_UNLOCKED, handleLockUpdate)
-      socket.off(SOCKET_EVENTS.FILE_LOCK_EXPIRED, handleLockUpdate)
+      socket.off(SOCKET_EVENTS.FILE_UPLOADED,      invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_DELETED,       invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_RESTORED,      invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_RENAMED,       invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_MOVED,         invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_VERSION_CREATED, invalidateFiles)
+      socket.off(SOCKET_EVENTS.FILE_LOCKED,        invalidateLockStatus)
+      socket.off(SOCKET_EVENTS.FILE_UNLOCKED,      invalidateLockStatus)
+      socket.off(SOCKET_EVENTS.FILE_LOCK_EXPIRED,  invalidateLockStatus)
 
-      socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleDocLockUpdate)
-      socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleDocLockUpdate)
+      socket.off(SOCKET_EVENTS.FOLDER_CREATED, invalidateFolders)
+      socket.off(SOCKET_EVENTS.FOLDER_RENAMED, invalidateFolders)
+      socket.off(SOCKET_EVENTS.FOLDER_DELETED, invalidateAll)
+      socket.off(SOCKET_EVENTS.FOLDER_MOVED,   invalidateFolders)
+
+      socket.off(SOCKET_EVENTS.DOCUMENT_CREATED,  invalidateDocs)
+      socket.off(SOCKET_EVENTS.DOCUMENT_RENAMED,  invalidateDocs)
+      socket.off(SOCKET_EVENTS.DOCUMENT_DELETED,  invalidateDocs)
+      socket.off(SOCKET_EVENTS.DOCUMENT_MOVED,    invalidateDocs)
+      socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED,   invalidateDocLockStatus)
+      socket.off(SOCKET_EVENTS.DOCUMENT_UNLOCKED, invalidateDocLockStatus)
 
       socket.emit('leave-team', { teamId })
       socket.disconnect()

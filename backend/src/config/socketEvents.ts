@@ -54,6 +54,9 @@ export const SOCKET_EVENTS = {
     DOCUMENT_VERSION_CREATED: 'document:versionCreated',
     DOCUMENT_LOCKED: 'document:locked',
     DOCUMENT_UNLOCKED: 'document:unlocked',
+    // Fired after version restore — all connected editors must reconnect
+    // to load the restored yjs_state from DB
+    DOCUMENT_RESTORED: 'document:restored',
 
 } as const
 

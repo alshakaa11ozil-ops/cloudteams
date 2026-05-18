@@ -54,7 +54,9 @@ export const SOCKET_EVENTS = {
     DOCUMENT_MOVED: 'document:moved',
     DOCUMENT_LOCKED: 'document:locked',
     DOCUMENT_UNLOCKED: 'document:unlocked',
-    DOCUMENT_VERSION_CREATED: 'document:versionCreated',   // 👈 ADD THIS
+    DOCUMENT_VERSION_CREATED: 'document:versionCreated',
+    // Fired when a version is restored — editors must reconnect to see new content
+    DOCUMENT_RESTORED: 'document:restored',
 
 } as const
 
