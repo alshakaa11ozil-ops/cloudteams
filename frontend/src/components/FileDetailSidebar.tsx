@@ -401,7 +401,7 @@ export default function FileDetailSidebar({
           </button>
 
           <button
-            onClick={() => { void handleStopEditing(); onClose() }}
+            onClick={onClose}
             className="p-1.5 hover:bg-slate-200 rounded-full transition-colors"
             aria-label="Close"
           >

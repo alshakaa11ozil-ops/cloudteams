@@ -26,6 +26,10 @@ export const createDocumentVersionHandler = async (req: Request, res: Response) 
             res.status(404).json({ error: 'Document not found' })
             return
         }
+        if (error instanceof Error && error.message === 'DOCUMENT_EMPTY') {
+            res.status(422).json({ error: 'Cannot save a version of an empty document. Start typing first.' })
+            return
+        }
         console.error('[createDocumentVersionHandler]', error)
         res.status(500).json({ error: 'Internal server error' })
     }

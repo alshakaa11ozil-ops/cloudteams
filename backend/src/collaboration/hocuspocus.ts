@@ -149,10 +149,14 @@ const collabServer = new Hocuspocus({
                 throw new Error(`Document ${id} not found or deleted`)
             }
             teamId = doc.team_id
+            // NOTE: We do NOT set readOnly here even if the doc is locked.
+            // Doing so prevents Hocuspocus from syncing document content to the
+            // user, resulting in a blank editor. Lock enforcement is done in
+            // onChange (below) which rejects writes without blocking content reads.
             if (doc.lockExpiresAt && doc.lockExpiresAt > new Date() && doc.lockOwnerUserId !== payload.userId) {
                 isLockedForUser = true
             }
-            console.log(`[Hocuspocus] ✅ Document ${id} found in team ${teamId} (Locked: ${isLockedForUser})`)
+            console.log(`[Hocuspocus] ✅ Document ${id} found in team ${teamId} (Locked for user: ${isLockedForUser})`)
         } else {
             const file = await prisma.file.findFirst({
                 where: { id, is_deleted: false },
@@ -166,7 +170,7 @@ const collabServer = new Hocuspocus({
             if (file.lockExpiresAt && file.lockExpiresAt > new Date() && file.lockOwnerUserId !== payload.userId) {
                 isLockedForUser = true
             }
-            console.log(`[Ho cuspocus] ✅ File ${id} found in team ${teamId} (Locked: ${isLockedForUser})`)
+            console.log(`[Hocuspocus] ✅ File ${id} found in team ${teamId} (Locked for user: ${isLockedForUser})`)
         }
 
         // Step 4: Verify team membership
@@ -178,12 +182,7 @@ const collabServer = new Hocuspocus({
             throw e
         }
 
-        if (isLockedForUser) {
-            (data as any).connection.readOnly = true
-            console.log(`[Hocuspocus] 🔒 Connection set to readOnly for user ${payload.userId}`)
-        }
-
-        console.log(`[Hocuspocus] ✅ Auth SUCCESS for "${documentName}"\n`)
+        console.log(`[Hocuspocus] ✅ Auth SUCCESS for "${documentName}" (isLockedForUser=${isLockedForUser})\n`)
 
         // Return context — available in store/onChange/onDisconnect as data.context
         return {
@@ -198,12 +197,44 @@ const collabServer = new Hocuspocus({
     // Fires on every document update (every keystroke).
     // Rate limit: 100 updates/10s per user per document.
     // Size cap: checked every 30s (Y.encodeStateAsUpdate is O(n) — expensive).
+    // Lock check: if document is locked by someone else, reject the write.
+    //   WHY HERE and not in onAuthenticate:
+    //   Setting readOnly in onAuthenticate blocks content delivery (blank doc).
+    //   Checking in onChange lets the user READ content but blocks writes.
     // ─────────────────────────────────────────────────────────────────────────
     async onChange(data) {
-        const key = data.context?.userId
-            ? `${data.context.userId}:${data.documentName}`
-            : null
+        const userId = data.context?.userId
+        const key = userId ? `${userId}:${data.documentName}` : null
         if (!key) return
+
+        // ── Lock enforcement ────────────────────────────────────────────────
+        // Check if document is locked by someone else. If so, reject this write.
+        // We check on every change to catch cases where lock was acquired AFTER
+        // the user connected (enforceLockOnActiveConnections covers the live case
+        // but a DB check here is the definitive server-side gate).
+        try {
+            const { type, id } = parseDocumentName(data.documentName)
+            if (type === 'doc') {
+                const doc = await prisma.documents.findFirst({
+                    where: { id, is_deleted: false },
+                    select: { lockOwnerUserId: true, lockExpiresAt: true }
+                })
+                if (
+                    doc?.lockExpiresAt &&
+                    doc.lockExpiresAt > new Date() &&
+                    doc.lockOwnerUserId !== null &&
+                    doc.lockOwnerUserId !== userId
+                ) {
+                    console.warn(`[Hocuspocus] 🔒 Write REJECTED — doc ${id} is locked by user ${doc.lockOwnerUserId}, change from user ${userId}`)
+                    throw new Error('Document is locked for editing by another user')
+                }
+            }
+            // File-level lock is handled by the lock.service.ts (separate flow)
+        } catch (lockErr: any) {
+            if (lockErr.message === 'Document is locked for editing by another user') throw lockErr
+            // Prisma/parse error — don't block the write, just log
+            console.error(`[Hocuspocus] ⚠️ Lock check error (non-blocking):`, lockErr.message)
+        }
 
         const now = Date.now()
         let record = updateCounts.get(key)
@@ -407,13 +438,23 @@ export function enforceLockOnActiveConnections(documentId: number, lockOwnerUser
     const document = collabServer.documents.get(targetName)
     if (!document) return
 
-    document.connections.forEach((_, conn: any) => {
-        if (lockOwnerUserId !== null && conn.context?.userId !== lockOwnerUserId) {
-            (conn.connection as any).readOnly = true
-            console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: connection set to readOnly for user ${conn.context?.userId}`)
+    // NOTE on Map.forEach signature: forEach(callbackFn(value, key))
+    // In Hocuspocus v4, document.connections is Map<Connection, ConnectionContext>
+    //   → first param (conn) is the Connection object
+    //   → second param (context) is the ConnectionContext with userId
+    // Previous code had (_, conn) which was reversed — readOnly was being set
+    // on the key (connection) but context was read from the wrong variable.
+    document.connections.forEach((conn: any, context: any) => {
+        const connUserId = context?.userId ?? conn?.context?.userId
+        if (lockOwnerUserId !== null && connUserId !== lockOwnerUserId) {
+            // Best-effort: try both possible shapes for the connection's readOnly flag
+            if (conn?.readOnly !== undefined) conn.readOnly = true
+            if (conn?.connection) (conn.connection as any).readOnly = true
+            console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: set readOnly for user ${connUserId}`)
         } else {
-            (conn.connection as any).readOnly = false
-            console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: connection set to readWrite for user ${conn.context?.userId}`)
+            if (conn?.readOnly !== undefined) conn.readOnly = false
+            if (conn?.connection) (conn.connection as any).readOnly = false
+            console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: set readWrite for user ${connUserId}`)
         }
     })
 }

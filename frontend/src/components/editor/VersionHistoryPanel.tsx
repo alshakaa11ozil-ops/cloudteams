@@ -46,7 +46,9 @@ export default function VersionHistoryPanel({ teamId, docId, onClose }: VersionH
       setNewVersionName('')
       setShowNameInput(false)
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to save version')
+      const msg = err.response?.data?.error || 'Failed to save version'
+      setError(msg)
+      // Keep the input open so user sees the error context
     } finally {
       setIsCreating(false)
     }

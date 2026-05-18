@@ -95,6 +95,18 @@ export const saveFileVersion = async (
     });
     if (!file) throw new AppError('File not found', 404);
 
+    // Files edited exclusively via the collaborative editor have no storage_path
+    // (the content lives only in yjs_state). We can't snapshot them via FileVersion
+    // since there's no disk file to restore from. Users should use the editor's
+    // own version history (documentVersion) for collaborative documents.
+    if (!file.storage_path) {
+        throw new AppError(
+            'This file has no uploaded content to snapshot. ' +
+            'Use the editor\'s History panel to save document versions.',
+            422
+        );
+    }
+
     const versionCount = await prisma.fileVersion.count({ where: { file_id: fileId } });
     const nextVersionNumber = versionCount + 1;
 
