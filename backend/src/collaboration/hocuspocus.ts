@@ -404,15 +404,16 @@ export default collabServer
 // ---------------------------------------------------------------------------
 export function enforceLockOnActiveConnections(documentId: number, lockOwnerUserId: number | null) {
     const targetName = `doc-${documentId}`
-    collabServer.connections.forEach((conn) => {
-        if (conn.documentName === targetName) {
-            if (lockOwnerUserId !== null && conn.context?.userId !== lockOwnerUserId) {
-                (conn.connection as any).readOnly = true
-                console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: connection set to readOnly for user ${conn.context?.userId}`)
-            } else {
-                (conn.connection as any).readOnly = false
-                console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: connection set to readWrite for user ${conn.context?.userId}`)
-            }
+    const document = collabServer.documents.get(targetName)
+    if (!document) return
+
+    document.connections.forEach((_, conn: any) => {
+        if (lockOwnerUserId !== null && conn.context?.userId !== lockOwnerUserId) {
+            (conn.connection as any).readOnly = true
+            console.log(`[Hocuspocus] 🔒 Live Lock Enforcement: connection set to readOnly for user ${conn.context?.userId}`)
+        } else {
+            (conn.connection as any).readOnly = false
+            console.log(`[Hocuspocus] 🔓 Live Lock Enforcement: connection set to readWrite for user ${conn.context?.userId}`)
         }
     })
 }

@@ -21,7 +21,6 @@ import { fetchFiles, fetchFolders, deleteFile, deleteFolder, searchFiles, rename
 import { fetchTeam } from '../api/teams'
 
 import { Popover, Transition } from '@headlessui/react'
-import { SparklesIcon } from '@heroicons/react/24/outline'
 import { useAuth } from '../hooks/useAuth'
 import { fetchDocuments, createDocument, deleteDocument, renameDocument, moveDocument } from '../api/documents'
 import FolderTree from '../components/FolderTree'
@@ -402,7 +401,7 @@ export default function FileBrowser() {
     socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleLockUpdate)
     socket.on(SOCKET_EVENTS.FILE_LOCK_EXPIRED, handleLockUpdate)
 
-    const handleDocLockUpdate = (payload: { documentId: number }) => {
+    const handleDocLockUpdate = () => {
       void queryClient.invalidateQueries({ queryKey: ['documents', teamId] })
     }
 

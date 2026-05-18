@@ -41,7 +41,7 @@ import axios from 'axios'
 import { useAuth } from '../hooks/useAuth'
 import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
 import { exportToDocx } from '../utils/exportDocx'
-import { useTeamSocket } from '../hooks/useTeamSocket'
+import socket from '../api/socket'
 import { SOCKET_EVENTS } from '../socketEvents'
 import toast from 'react-hot-toast'
 
@@ -123,8 +123,6 @@ export default function DocumentEditor() {
   const [lockOwnerUserId, setLockOwnerUserId] = useState<number | null>(null)
   const [lockExpiresAt, setLockExpiresAt] = useState<string | null>(null)
   const [isLockLoading, setIsLockLoading] = useState(false)
-
-  const { socket } = useTeamSocket(teamId ? parseInt(teamId, 10) : undefined)
 
   // --------------------------------------------------------------------------
   // SOCKET: Real-time lock updates
