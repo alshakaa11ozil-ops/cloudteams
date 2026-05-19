@@ -17,6 +17,7 @@ export const SOCKET_EVENTS = {
     FILE_RENAMED: 'file:renamed',     // file name changed
     FILE_MOVED: 'file:moved',       // moved to different folder
     FILE_VERSION_CREATED: 'file:versionCreated', // new version explicitly saved
+    FILE_VERSION_RESTORED: 'file:versionRestored', // fired when file version is restored
 
     // ── Folders ────────────────────────────────────────────────────────────
     FOLDER_CREATED: 'folder:created',

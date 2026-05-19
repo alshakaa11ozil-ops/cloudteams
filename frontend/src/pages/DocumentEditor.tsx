@@ -178,11 +178,19 @@ export default function DocumentEditor() {
       }
     }
 
+    const handleFileRestored = (payload: any) => {
+      if (mode === 'file' && payload.fileId === parseInt(fileId!, 10)) {
+        toast.success('A previous version has been restored. Reloading file...', { duration: 4000 })
+        setTimeout(() => setEditorKey(k => k + 1), 800)
+      }
+    }
+
     socket.on(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
     socket.on(SOCKET_EVENTS.DOCUMENT_UNLOCKED, handleUnlocked)
     socket.on(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
     socket.on(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
     socket.on(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
+    socket.on(SOCKET_EVENTS.FILE_VERSION_RESTORED, handleFileRestored)
 
     return () => {
       socket.off(SOCKET_EVENTS.DOCUMENT_LOCKED, handleLocked)
@@ -190,6 +198,7 @@ export default function DocumentEditor() {
       socket.off(SOCKET_EVENTS.FILE_LOCKED, handleLocked)
       socket.off(SOCKET_EVENTS.FILE_UNLOCKED, handleUnlocked)
       socket.off(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
+      socket.off(SOCKET_EVENTS.FILE_VERSION_RESTORED, handleFileRestored)
     }
   }, [socket, docId, fileId, mode, user?.id, lockOwnerUserId])
 

@@ -13,6 +13,7 @@ import { assertTeamMember, AppError } from '../utils/teamGuard';
 import { logActivity } from '../utils/activityLogger';
 import { emitToTeam } from '../socket';
 import { SOCKET_EVENTS } from '../config/socketEvents';
+import { forceReconnectFile } from '../collaboration/hocuspocus';
 
 // Internal helper — snapshot current file state into file_versions table
 // Called BEFORE any overwrite so we never lose a version.
@@ -42,6 +43,7 @@ export const createVersion = async (
             file_size: file.file_size,
             uploaded_by: file.uploaded_by,
             encryption_iv: file.encryption_iv,
+            yjs_state: file.yjs_state,
         },
     });
 };
@@ -120,6 +122,7 @@ export const saveFileVersion = async (
             file_size: file.file_size,
             uploaded_by: userId,
             encryption_iv: file.encryption_iv,
+            yjs_state: file.yjs_state,
             // versionName is stored in a JSON metadata pattern via yjs_state field
             // if you want a dedicated column, add version_name to FileVersion in schema
         },
@@ -287,10 +290,10 @@ export const restoreVersion = async (
                 file_size: targetVersion.file_size,
                 encryption_iv: targetVersion.encryption_iv,
 
-                // WHY null: collaborative editor prioritises yjs_state over disk file.
-                // Without clearing this, the editor ignores the restored storage_path
-                // and the user sees no change despite the DB being correctly updated.
-                yjs_state: null,
+                // WHY targetVersion.yjs_state: If the historical version had collaborative edits,
+                // we must restore them. If it didn't, this correctly clears yjs_state so the
+                // editor falls back to reading from storage_path.
+                yjs_state: targetVersion.yjs_state,
 
                 // WHY null: clears the stale "last synced" timestamp.
                 // Leaving a stale timestamp is misleading in the UI.
@@ -326,6 +329,14 @@ export const restoreVersion = async (
         });
 
         return restoredFile;
+    });
+
+    forceReconnectFile(fileId);
+
+    emitToTeam(teamId, SOCKET_EVENTS.FILE_VERSION_RESTORED, {
+        fileId,
+        versionId: targetVersion.id,
+        restoredBy: userId
     });
 
     return updatedFile;

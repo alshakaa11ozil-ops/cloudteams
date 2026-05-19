@@ -524,3 +524,39 @@ export function forceReconnectDocument(documentId: number): void {
 
     console.log(`[Hocuspocus] ✅ forceReconnectDocument: closed ${connectionsToClose.length} connection(s) for doc-${documentId}`)
 }
+
+// ---------------------------------------------------------------------------
+// HELPER: forceReconnectFile
+// ---------------------------------------------------------------------------
+// Called after version restore to kick all active connections for a file.
+// ---------------------------------------------------------------------------
+export function forceReconnectFile(fileId: number): void {
+    const targetName = `file-${fileId}`
+    const document = collabServer.documents.get(targetName)
+    if (!document) {
+        console.log(`[Hocuspocus] forceReconnectFile: file-${fileId} not in memory, nothing to do`)
+        return
+    }
+
+    console.log(`[Hocuspocus] 🔄 forceReconnectFile: closing all connections for file-${fileId}`)
+
+    const connectionsToClose: any[] = []
+    document.connections.forEach((valueOrKey: any, keyOrValue: any) => {
+        for (const obj of [valueOrKey, keyOrValue]) {
+            if (obj && typeof obj === 'object' && typeof obj.close === 'function') {
+                connectionsToClose.push(obj)
+                break
+            }
+        }
+    })
+
+    for (const conn of connectionsToClose) {
+        try {
+            conn.close()
+        } catch (e: any) {
+            console.warn(`[Hocuspocus] forceReconnectFile: close() failed:`, e.message)
+        }
+    }
+
+    console.log(`[Hocuspocus] ✅ forceReconnectFile: closed ${connectionsToClose.length} connection(s) for file-${fileId}`)
+}
