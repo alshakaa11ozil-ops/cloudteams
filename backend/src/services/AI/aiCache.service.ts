@@ -35,13 +35,11 @@ export type AiFeature = keyof typeof AI_COOLDOWNS
 //   targetId  — optional file/folder ID (null for team-level features like digest)
 //
 // OUTPUTS: cached result string, or null if cache miss / expired
-//
 export async function getCachedResult(
     teamId: number,
     feature: AiFeature,
     targetId: number | null = null
 ): Promise<{ result: string; cachedAt: Date } | null> {
-
     const cached = await prisma.ai_cache.findFirst({
         where: {
             team_id: teamId,
@@ -49,42 +47,20 @@ export async function getCachedResult(
             target_id: targetId
         }
     })
-
-    if (!cached) return null  // cache miss — never been generated
-
-    // Check expiry — if expires_at is in the past, treat as miss
+    if (!cached) return null
     if (cached.expires_at < new Date()) return null
-
     return { result: cached.result, cachedAt: cached.created_at }
 }
-
 // ─── setCachedResult ────────────────────────────────────────────────────────
-//
-// PURPOSE: Store an AI result in the cache after a successful Gemini call.
-//
-// WHY UPSERT: If the user regenerates (af0ter cooldown expires), we overwrite
-//   the old entry rather than inserting a duplicate.
-//
-// INPUTS:
-//   teamId    — which team owns this cache entry
-//   feature   — which AI feature
-//   targetId  — optional file ID (null for digest)
-//   result    — the AI output string to store
-//
 export async function setCachedResult(
     teamId: number,
     feature: AiFeature,
     targetId: number | null,
     result: string
 ): Promise<void> {
-
     const cooldownMs = AI_COOLDOWNS[feature]
-
-    // If cooldown is very short (duplicate_explain), set expires_at accordingly.
     const expiresAt = new Date(Date.now() + Math.max(cooldownMs, 1000))
 
-    // Prisma's upsert does not support null values in composite unique keys.
-    // We use a findFirst + conditional write to safely handle targetId being null.
     const existing = await prisma.ai_cache.findFirst({
         where: {
             team_id: teamId,

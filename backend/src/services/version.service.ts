@@ -123,8 +123,8 @@ export const saveFileVersion = async (
             uploaded_by: userId,
             encryption_iv: file.encryption_iv,
             yjs_state: file.yjs_state,
-            // versionName is stored in a JSON metadata pattern via yjs_state field
-            // if you want a dedicated column, add version_name to FileVersion in schema
+            // version_name column exists in the schema — persist the user-provided label
+            version_name: versionName ?? null,
         },
         include: {
             uploader: { select: { id: true, username: true, email: true } },
@@ -191,6 +191,7 @@ export const listVersions = async (
         file_size: v.file_size,
         uploaded_by: v.uploaded_by,
         encryption_iv: v.encryption_iv,
+        version_name: v.version_name ?? null,   // user-provided label — was missing before
         created_at: v.created_at,
         uploader: v.uploader
             ? { id: v.uploader.id, username: v.uploader.username, email: v.uploader.email }

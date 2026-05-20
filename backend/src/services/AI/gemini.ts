@@ -89,8 +89,6 @@ export async function callGeminiWithMeta(
                 console.error(`[Gemini] API error ${response.status} (attempt ${attempt}, key #${keyPoolIndex + 1}):`, errorText)
 
                 // Handle Rate Limit (429)
-                // Strategy: rotate to the next key in the pool first.
-                // If we've exhausted all keys, wait 10s then start over with key #1.
                 if (response.status === 429) {
                     keyPoolIndex++
                     if (keyPoolIndex < keyPool.length) {
@@ -109,7 +107,6 @@ export async function callGeminiWithMeta(
                         throw new Error('GEMINI_ERROR: AI rate limit exceeded on all API keys. Please wait a minute and try again.')
                     }
                 }
-
                 // Retry on server errors (500, 503) — these are usually transient
                 if ([500, 503].includes(response.status) && attempt <= maxRetries) {
                     const backoff = attempt * 800
@@ -117,8 +114,6 @@ export async function callGeminiWithMeta(
                     await new Promise(r => setTimeout(r, backoff))
                     continue
                 }
-
-                // Parse error JSON if possible for a cleaner message
                 let friendlyMsg = errorText
                 try {
                     const parsed = JSON.parse(errorText)
@@ -126,10 +121,8 @@ export async function callGeminiWithMeta(
                         friendlyMsg = parsed.error.message
                     }
                 } catch {
-                    // It's fine if it's not JSON
                 }
 
-                // Provide friendly messages for common HTTP errors
                 if (response.status === 429) {
                     throw new Error('GEMINI_ERROR: AI rate limit exceeded on all API keys. Please wait a minute and try again.')
                 }

@@ -46,7 +46,6 @@ import folderRoutes from './routes/folderRoutes'
 import searchRoutes from './routes/searchRoutes'
 import recycleBinRoutes from './routes/recycleBinRoutes'
 import commentRoutes from './routes/commentRoutes'
-import versionRoutes from './routes/versionRoutes'
 import shareRoutes from './routes/shareRoutes'
 import digestRouter from './routes/digestRoutes'
 import editorAssistRoutes from './routes/editorAssistRoutes'
@@ -114,7 +113,9 @@ app.use('/api/folders', folderRoutes)
 app.use('/api/search', searchRoutes)
 app.use('/api/teams', recycleBinRoutes)
 app.use('/api/teams', commentRoutes)
-app.use('/api/teams', versionRoutes)
+// NOTE: versionRoutes is already mounted INSIDE teamRoutes via router.use('/', versionRouter).
+// Do NOT add app.use('/api/teams', versionRoutes) here — it would cause saveVersionHandler
+// to execute twice on every request, sending a response on an already-closed connection → 500.
 app.use('/api/share', shareRoutes)
 app.use('/api', digestRouter)
 app.use('/api', editorAssistRoutes)

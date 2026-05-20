@@ -144,24 +144,15 @@ export const uploadFile = async (
     userAgent: string,
     folderId?: number
 ): Promise<{ file: object; isDuplicate: boolean; duplicateReason?: string | null }> => {
-
     // ─── STEP 1: Permission check ───────────────────────────────────────────────
     await verifyEditorRole(uploadedBy, teamId);
-
     // ─── STEP 2: Hash the buffer ────────────────────────────────────────────────
-    // multerFile.buffer exists because we switched to memoryStorage.
-    // multerFile.path no longer exists — there is no disk file.
     const hash = calculateFileHash(multerFile.buffer);
-
     // ─── STEP 3: Content deduplication check ────────────────────────────────────
-    // Does a file with this exact content already exist in this team?
     const existingContent = await prisma.file.findFirst({
         where: { hash, team_id: teamId, is_deleted: false },
     });
-
     // ─── STEP 4: Name collision check ───────────────────────────────────────────
-    // Does a file with this name already exist in the same folder?
-    // If yes → we're uploading a new VERSION, not a new file.
     const fileWithSameName = await prisma.file.findFirst({
         where: {
             original_name: multerFile.originalname,
@@ -170,61 +161,37 @@ export const uploadFile = async (
             is_deleted: false,
         },
     });
-
     // ─── STEP 5: Prepare the buffer we'll send to R2 ────────────────────────────
-    // If encryption is enabled AND this is genuinely new content, encrypt the buffer.
-    // Duplicates reuse the original's storage_path (already encrypted at first upload).
-    let bufferToUpload = multerFile.buffer;   // default: plaintext
+    let bufferToUpload = multerFile.buffer;
     let encryptionIv: string | null = null;
     let storagePath: string;
     let isDuplicate: boolean;
     let duplicateReason: string | null = null;
 
     if (existingContent) {
-        // ── CONTENT DUPLICATE ──
-        // Same bytes already stored in R2. Don't upload again.
-        // Point the new DB record at the existing R2 object key.
         storagePath = existingContent.storage_path;
         isDuplicate = true;
-        // Copy IV from the original — same object in R2, same IV needed to decrypt.
         encryptionIv = (existingContent as any).encryption_iv ?? null;
         duplicateReason = await explainDuplicate(teamId, multerFile.originalname, existingContent.id);
-
     } else {
-        // ── NEW CONTENT ──
-        // Encrypt the buffer if encryption is enabled.
         if (isEncryptionEnabled()) {
             try {
                 const { encryptedBuffer, iv } = encryptBuffer(multerFile.buffer);
-                bufferToUpload = encryptedBuffer;   // upload the encrypted version
+                bufferToUpload = encryptedBuffer;
                 encryptionIv = iv;
             } catch (err) {
                 console.error('[Upload] Encryption failed, storing unencrypted:', err);
-                // Graceful degradation — upload plaintext, null IV signals no encryption.
-                // Download handler checks for null IV and serves the buffer directly.
             }
         }
-
         isDuplicate = false;
-        // storage_path will be set after we create the DB record and get its ID.
-        // We need the DB ID to build the R2 key (teams/1/files/42-report.pdf).
-        storagePath = 'pending'; // temporary placeholder
+        storagePath = 'pending';
     }
-
     // ─── STEP 6: Name collision → create a new VERSION ──────────────────────────
     if (fileWithSameName) {
-
         if (fileWithSameName.hash === hash) {
-            // Exact same name AND exact same content — already handled by dedup above.
-            // Don't create a version entry for an identical re-upload.
             return { file: fileWithSameName, isDuplicate: true, duplicateReason };
         }
-
-        // Different content under the same name → snapshot current state as a version.
         await createVersion(fileWithSameName.id);
-
-        // If this is new content (not a duplicate), upload to R2 now.
-        // We use the EXISTING file's DB id for the object key — it's the same logical file.
         if (!existingContent) {
             const objectKey = generateObjectKey(teamId, fileWithSameName.id, multerFile.originalname);
             try {
@@ -866,7 +833,7 @@ function yjsNodeToHtml(node: Y.XmlElement | Y.XmlText | Y.XmlFragment): string {
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;')
                     .replace(/\n/g, '<br>');
-                
+
                 const attrs = op.attributes || {};
                 if (attrs.code) segment = `<code>${segment}</code>`;
                 if (attrs.bold) segment = `<strong>${segment}</strong>`;

@@ -104,38 +104,27 @@ export const authenticate = async (
       return;
     }
 
-    const token = authHeader.substring(7); // strip "Bearer "
+    const token = authHeader.substring(7);
 
     // CHECK 1: Cryptographic validity
-    // jwt.verify() throws if: signature is wrong, token expired, or malformed
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET as string
     ) as { userId: number; email: string };
 
     // CHECK 2: Blacklist lookup
-    // If this token was explicitly invalidated via logout, reject it
-    // even though its signature is still mathematically valid.
     const blacklisted = await prisma.token_blacklist.findUnique({
       where: { token }
-      // findUnique uses the UNIQUE index on 'token' — this is a fast O(1) lookup,
-      // not a full table scan. The index is created automatically by @unique in schema.
+
     });
 
     if (blacklisted) {
-      // The token was explicitly revoked — treat it as if it's expired
       res.status(401).json({ error: 'Token has been revoked. Please log in again.' });
       return;
     }
-
-    // Token is valid and not blacklisted — attach user info to request
-    // This is what allows controllers to use req.user!.userId
     req.user = { userId: decoded.userId, email: decoded.email };
-
-    next(); // Pass control to the next middleware or controller
+    next();
   } catch (error: any) {
-    // jwt.verify() throws JsonWebTokenError for bad signature
-    // and TokenExpiredError for expired tokens
     if (error.name === 'TokenExpiredError') {
       res.status(401).json({ error: 'Token expired. Please log in again.' });
       return;
@@ -144,7 +133,7 @@ export const authenticate = async (
       res.status(401).json({ error: 'Invalid token.' });
       return;
     }
-    // Unexpected error (e.g. database down)
+
     console.error('[authenticate]', error);
     res.status(500).json({ error: 'Authentication failed' });
   }

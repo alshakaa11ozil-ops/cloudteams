@@ -61,55 +61,27 @@ function getMasterKey(): Buffer {
 
 export async function encryptFile(filePath: string): Promise<{ iv: string }> {
     const masterKey = getMasterKey()
-
     // Generate a fresh random IV for this specific file
-    // WHY RANDOM: Ensures identical files produce different ciphertext
     const iv = crypto.randomBytes(IV_LENGTH)
-
     // Read the plaintext file multer just wrote
     const plaintext = fs.readFileSync(filePath)
-
     // Create cipher — AES-256-GCM with our master key and fresh IV
     const cipher = crypto.createCipheriv(ALGORITHM, masterKey, iv)
-
-    // Encrypt the data
-    // update() processes the data, final() flushes any remaining bytes
     const encrypted = Buffer.concat([
         cipher.update(plaintext),
         cipher.final()
     ])
-
     // Get the authentication tag — 16 bytes that prove the data wasn't tampered with
-    // WHY PREPEND TAG: We need the tag during decryption. Storing it in the file
-    // itself (prepended) is simpler than storing it separately in the DB.
     const authTag = cipher.getAuthTag()
 
-    // Write structure: [16 bytes authTag][encrypted data]
-    // The IV is stored in the DB — we don't need it in the file itself
     const finalBuffer = Buffer.concat([authTag, encrypted])
 
-    // Overwrite the plaintext file with the encrypted version
     fs.writeFileSync(filePath, finalBuffer)
-
     console.log(`[Encryption] Encrypted: ${path.basename(filePath)} (${plaintext.length} → ${finalBuffer.length} bytes)`)
-
     return { iv: iv.toString('hex') }
 }
 
 // ─── decryptFile ──────────────────────────────────────────────────────────────
-//
-// PURPOSE: Read an encrypted file from disk, decrypt it, return as Buffer.
-//          Used by download and preview endpoints.
-//
-// INPUTS:
-//   filePath — absolute path to the .enc file on disk
-//   ivHex    — the IV stored in the database for this file
-//
-// OUTPUTS:
-//   Buffer of the original plaintext file content
-//
-// THROWS:
-//   Error if the auth tag doesn't match — means file was tampered with
 
 export function decryptFile(filePath: string, ivHex: string): Buffer {
     const masterKey = getMasterKey()
@@ -155,17 +127,11 @@ export function encryptBuffer(plainBuffer: Buffer): {
 
     const cipher = crypto.createCipheriv(ALGORITHM, masterKey, ivBuffer);
 
-    // Encrypt in one pass — update() processes all bytes, final() flushes remainder.
     const encrypted = Buffer.concat([
         cipher.update(plainBuffer),
         cipher.final(),
     ]);
-
-    // getAuthTag() must be called AFTER final() — GCM computes the tag at the end.
-    // The tag proves the data wasn't modified between encryption and decryption.
     const authTag = cipher.getAuthTag();
-
-    // Structure: [16 bytes authTag][encrypted data] — matches disk version exactly.
     const encryptedBuffer = Buffer.concat([authTag, encrypted]);
 
     return {
@@ -173,14 +139,8 @@ export function encryptBuffer(plainBuffer: Buffer): {
         iv: ivBuffer.toString('hex'), // store this in the DB
     };
 }
-// THROWS:
-//   Error if auth tag doesn't match — file was tampered with on R2.
-//   This is GCM's integrity guarantee in action.
+
 //
-// WHY THIS IS NEEDED SEPARATELY FROM decryptFile:
-//   decryptFile reads from disk (fs.readFileSync).
-//   After switching to R2, downloads return a stream/buffer — no file path.
-//   decryptBuffer takes that buffer directly, no disk access needed.
 export function decryptBuffer(encryptedBuffer: Buffer, ivHex: string): Buffer {
     const masterKey = getMasterKey();
     const iv = Buffer.from(ivHex, 'hex');
@@ -191,9 +151,6 @@ export function decryptBuffer(encryptedBuffer: Buffer, ivHex: string): Buffer {
 
     const decipher = crypto.createDecipheriv(ALGORITHM, masterKey, iv);
 
-    // setAuthTag must be called BEFORE update/final.
-    // GCM verifies the tag during final() — if the bytes were modified,
-    // final() throws. This is the tamper detection mechanism.
     decipher.setAuthTag(authTag);
 
     try {
@@ -210,10 +167,7 @@ export function decryptBuffer(encryptedBuffer: Buffer, ivHex: string): Buffer {
 
 // ─── isEncryptionEnabled ──────────────────────────────────────────────────────
 //
-// PURPOSE: Check whether encryption is configured.
-//          Used to handle both encrypted and legacy unencrypted files gracefully.
-// WHY NEEDED: Files uploaded before encryption was added have no IV in the DB.
-//   We check encryption_iv — if null, serve the file directly (backwards compatible).
+//
 
 export function isEncryptionEnabled(): boolean {
     return !!process.env.FILE_ENCRYPTION_KEY

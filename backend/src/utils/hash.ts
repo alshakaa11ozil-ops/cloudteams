@@ -23,28 +23,7 @@
 import crypto from 'crypto'; // Node.js built-in — no npm install needed
 
 // ---------------------------------------------------------------------------
-// calculateFileHash
-// ---------------------------------------------------------------------------
-// PURPOSE: Compute SHA-256 hash of a file buffer already in memory.
-//
-// INPUTS:
-//   buffer (Buffer) — the raw file bytes from multerFile.buffer
-//
-// OUTPUTS:
-//   string — 64-character hex string
-//   Example: "a3f5c2d1e8b4...64 hex chars total"
-//
-// WHY SYNCHRONOUS (not Promise)?
-//   The original async version was needed because disk I/O is async.
-//   Buffer hashing is pure CPU computation — no I/O, no waiting.
-//   Synchronous is correct here. Wrapping in a Promise would add
-//   overhead with zero benefit.
-// ---------------------------------------------------------------------------
 export function calculateFileHash(buffer: Buffer): string {
-    // crypto.createHash('sha256') creates a Hash object.
-    // .update(buffer) feeds ALL bytes in one call — no chunking needed
-    // because the buffer is already fully in RAM.
-    // .digest('hex') finalises and returns the 64-char hex string.
     return crypto
         .createHash('sha256')
         .update(buffer)

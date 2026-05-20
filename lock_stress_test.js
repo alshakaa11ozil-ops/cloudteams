@@ -14,8 +14,8 @@ const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYsImVtYWls
 const TEAM_ID = 1;   // replace with your actual team ID
 const FILE_ID = 1;   // replace with an unlocked file ID in that team
 
-const CONCURRENT_REQUESTS = 50;
-const RUNS = 5; // how many times to repeat the test
+const CONCURRENT_REQUESTS = 100;
+const RUNS = 20; // how many times to repeat the test
 // ─────────────────────────────────────────────────────────────
 
 function acquireLock() {

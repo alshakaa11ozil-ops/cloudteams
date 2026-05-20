@@ -333,6 +333,7 @@ export interface FileVersion {
   created_at: string;
   encryption_iv?: string | null;
   uploaded_by: number;
+  version_name?: string | null;   // optional user-provided label e.g. "Before Q3 review"
   uploader?: {
     id: number;
     username: string;

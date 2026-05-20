@@ -30,6 +30,8 @@ import * as Y from 'yjs'
 import prisma from '../config/database'
 import { verifyToken } from '../utils/jwt'
 import { assertTeamMember } from '../utils/teamGuard'
+import { emitToTeam } from '../socket'
+import { SOCKET_EVENTS } from '../config/socketEvents'
 
 // ---------------------------------------------------------------------------
 // HELPER: parseDocumentName
@@ -192,11 +194,22 @@ const collabServer = new Hocuspocus({
         //   2. onChange is never called for this connection (writes blocked ✅)
         //   3. No disconnect, no blank editor, no spurious auth error toast ✅
         if (isLockedForUser) {
-            ;(data as any).connection.readOnly = true
-            console.log(`[Hocuspocus] 🔒 Connection set to readOnly for locked-out user ${payload.userId}`)
+            // data.connection is undefined at the onAuthenticate stage in Hocuspocus v4.
+            // The connection socket hasn't been fully wired at this point, so we
+            // guard the assignment to avoid a TypeError crash.
+            // ReadOnly enforcement is still honoured: onChange queries the lock on
+            // every incoming change and drops writes from locked-out users.
+            const conn = (data as any).connection
+            if (conn != null) {
+                conn.readOnly = true
+                console.log(`[Hocuspocus] 🔒 Connection set to readOnly for locked-out user ${payload.userId}`)
+            } else {
+                console.log(`[Hocuspocus] 🔒 Locked-out user ${payload.userId} — readOnly will be enforced via onChange (connection not yet available in onAuthenticate)`)
+            }
         }
 
         console.log(`[Hocuspocus] ✅ Auth SUCCESS for "${documentName}" (isLockedForUser=${isLockedForUser})\n`)
+
 
         // Return context — available in store/onChange/onDisconnect as data.context
         return {
@@ -382,7 +395,7 @@ const collabServer = new Hocuspocus({
                         // so we can detect the very first real write.
                         const prevDoc = await prisma.documents.findFirst({
                             where: { id, is_deleted: false },
-                            select: { yjs_state: true, created_by: true }
+                            select: { yjs_state: true, created_by: true, team_id: true }
                         })
 
                         const result = await prisma.documents.updateMany({
@@ -416,6 +429,10 @@ const collabServer = new Hocuspocus({
                                         }
                                     })
                                     console.log(`[Hocuspocus] ✅ store() created v1 snapshot for doc ${id}`)
+                                    emitToTeam(prevDoc.team_id, SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, {
+                                        documentId: id,
+                                        versionName: 'Initial version',
+                                    })
                                 }
                             }
                         }

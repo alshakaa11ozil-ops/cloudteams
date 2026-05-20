@@ -77,9 +77,6 @@ export async function acquireLock(
     ip: string,
     userAgent: string
 ): Promise<LeaseResult> {
-
-    // Verify the file exists and belongs to this team.
-    // We check team_id so a user from Team A cannot lock Team B's files.
     const file = await prisma.file.findFirst({
         where: {
             id: fileId,
@@ -89,7 +86,6 @@ export async function acquireLock(
     });
 
     if (!file) {
-        // Throw a plain Error — controller will catch and send 404.
         throw new Error('FILE_NOT_FOUND');
     }
 
@@ -99,18 +95,6 @@ export async function acquireLock(
     const lockToken = uuidv4();
     const lockExpiresAt = newExpiresAt();
 
-    // THE ATOMIC ACQUIRE — this is the core of the lease model.
-    //
-    // updateMany only updates rows where ALL WHERE conditions are true.
-    // The condition:
-    //   lockExpiresAt IS NULL  → no one has locked it yet
-    //   OR lockExpiresAt < NOW() → a lease exists but it has expired
-    //
-    // If a valid lease exists (lockExpiresAt > NOW()), zero rows match,
-    // count = 0, and we know to reject the request.
-    //
-    // If we win, the WHERE and SET happen in one database transaction —
-    // no other request can sneak in between the check and the write.
     const result = await prisma.file.updateMany({
         where: {
             id: fileId,
@@ -128,13 +112,10 @@ export async function acquireLock(
         },
     });
 
-    // count = 0 means the WHERE clause matched nothing →
-    // a valid (non-expired) lease already exists.
     if (result.count === 0) {
         throw new Error('FILE_ALREADY_LOCKED');
     }
 
-    // Write the audit log entry.
     // fire-and-forget (no await) — never block the response for logging.
     // We include ip and userAgent so there's a full audit trail.
     void logActivity({
@@ -148,33 +129,17 @@ export async function acquireLock(
             lockExpiresAt,
             ip,
             userAgent,
-            file_name: file.original_name // ← Fixes 'item #15' issue
+            file_name: file.original_name
         },
     });
     emitToTeam(teamId, SOCKET_EVENTS.FILE_LOCKED, {
         fileId,
-        lockedBy: userId,       // frontend will resolve name from its own state
+        lockedBy: userId,
         lockExpiresAt: lockExpiresAt.toISOString(),
     });
     return { lockToken, lockExpiresAt };
 }
 
-// ============================================================
-// FUNCTION 2: extendLease
-// PURPOSE:  The heartbeat. Called every ~25 seconds by the client
-//           while the user has the file open. Resets the 30-minute
-//           timer so the lease does not expire during active editing.
-// INPUTS:   fileId    — which file
-//           lockToken — the UUID the client received at acquire time
-//           userId    — who is sending the heartbeat
-//           teamId    — for audit log
-// OUTPUTS:  LeaseResult with the new lockExpiresAt
-//           Throws if the token doesn't match (wrong owner or expired)
-// WHY TOKEN VALIDATION:
-//   Without token validation, any team member could send a heartbeat
-//   and extend someone else's lock — or prevent it from expiring.
-//   The token proves ownership. Only the lock holder has it.
-// ============================================================
 export async function extendLease(
     fileId: number,
     lockToken: string,
@@ -184,25 +149,20 @@ export async function extendLease(
 
     const newExpiry = newExpiresAt();
 
-    // Again, atomic updateMany with strict conditions:
-    //   - correct file
-    //   - token must match exactly (proves ownership)
-    //   - lease must not already be expired (can't revive a dead lease)
     const result = await prisma.file.updateMany({
         where: {
             id: fileId,
             team_id: teamId,
-            lockToken: lockToken,           // token must match
-            lockOwnerUserId: userId,        // user must be the lock owner
-            lockExpiresAt: { gt: new Date() }, // lease must still be active
+            lockToken: lockToken,
+            lockOwnerUserId: userId,
+            lockExpiresAt: { gt: new Date() },
         },
         data: {
-            lockExpiresAt: newExpiry,       // reset the 30-minute timer
+            lockExpiresAt: newExpiry,
         },
     });
 
     if (result.count === 0) {
-        // Either: wrong token, wrong user, or lease already expired.
         throw new Error('LOCK_NOT_FOUND_OR_EXPIRED');
     }
 
@@ -298,7 +258,6 @@ export async function getLockStatus(
             lockOwnerUserId: true,
             lockExpiresAt: true,
             editingStartedAt: true,
-            // join to users table to get the username
             lockOwner: {
                 select: { id: true, username: true, email: true },
             },
@@ -309,8 +268,6 @@ export async function getLockStatus(
         throw new Error('FILE_NOT_FOUND');
     }
 
-    // A lock is "active" only if lockExpiresAt exists AND is in the future.
-    // An expired lease is treated as no lock — same as if it was cleared.
     const now = new Date();
     const isLocked =
         file.lockExpiresAt !== null && file.lockExpiresAt > now;

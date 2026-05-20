@@ -620,6 +620,11 @@ export default function FileDetailSidebar({
                       </span>
                     )}
                   </div>
+                  {v.version_name && (
+                    <p className="text-xs text-indigo-600 font-medium mt-0.5 truncate" title={v.version_name}>
+                      {v.version_name}
+                    </p>
+                  )}
                   <p className="text-xs text-slate-400 mt-0.5">
                     {formatBytes(v.file_size)} · {v.uploader?.username ?? 'unknown'} · {format(new Date(v.created_at), 'MMM d, HH:mm')}
                   </p>

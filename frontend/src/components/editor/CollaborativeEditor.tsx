@@ -202,8 +202,13 @@ export default function CollaborativeEditor(props: CollaborativeEditorProps) {
       token: localStorage.getItem('cloudteams_token') ?? '',
       onAuthenticationFailed({ reason }) {
         console.error('[Hocuspocus] Auth failed:', reason)
-        toast.error(`Authentication failed: ${reason}`)
-      },
+        // WHY: 'permission-denied' for locked docs means readOnly mode,
+        // not a real auth failure. The actual lock toast is shown by
+        // DocumentEditor via Socket.io. Don't double-toast here.
+        if (reason !== 'permission-denied') {
+            toast.error(`Authentication failed: ${reason}`)
+        }
+    },
     })
 
     if (!destroyed) {
