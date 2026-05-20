@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { History, X, Clock, Loader2, RotateCcw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import toast from 'react-hot-toast'
 import { fetchDocumentVersions, createDocumentVersion, restoreDocumentVersion } from '../../api/documents'
 import type { DocumentVersion } from '../../api/documents'
 import socket from '../../api/socket'
@@ -62,6 +63,7 @@ export default function VersionHistoryPanel({ teamId, docId, onClose }: VersionH
       await loadVersions()
       setNewVersionName('')
       setShowNameInput(false)
+      toast.success('Version saved successfully')
     } catch (err: any) {
       const msg = err.response?.data?.error || 'Failed to save version'
       setError(msg)

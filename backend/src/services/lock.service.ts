@@ -209,6 +209,10 @@ export async function releaseLock(
         },
     });
 
+    if (result.count === 0) {
+        throw new Error('LOCK_NOT_FOUND_OR_NOT_OWNER');
+    }
+
     const file = await prisma.file.findFirst({
         where: { id: fileId, team_id: teamId },
         select: { original_name: true }

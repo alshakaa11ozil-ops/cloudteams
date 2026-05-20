@@ -113,7 +113,7 @@ export default function FileBrowser() {
   // Sidebar state — which file is currently selected for the detail panel
   // null = sidebar closed, CloudFile = sidebar open showing that file's details
   const [selectedFile, setSelectedFile] = useState<CloudFile | null>(null)
-  const [selectedDocument, setSelectedDocument] = useState<DocumentSummary | null>(null)
+  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
   const [itemToShare, setItemToShare] = useState<{ type: 'file' | 'folder', id: number, name: string } | null>(null)
 
   // Documents section state
@@ -155,6 +155,10 @@ export default function FileBrowser() {
     enabled: teamId > 0 && !isSearching,
     staleTime: 30_000,
   })
+
+  const selectedDocument = useMemo(() => {
+    return documentsQuery.data?.find(d => d.id === selectedDocumentId) ?? null
+  }, [documentsQuery.data, selectedDocumentId])
 
   // Listen to lock socket events to auto-refresh the file list
   useEffect(() => {
@@ -881,7 +885,7 @@ export default function FileBrowser() {
                     key={doc.id}
                     className="group relative bg-white border border-gray-200 rounded-xl p-4 hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer"
                     onClick={() => {
-                      setSelectedDocument(doc)
+                      setSelectedDocumentId(doc.id)
                       setSelectedFile(null)
                     }}
                     onDoubleClick={() => navigate(`/teams/${teamId}/documents/${doc.id}`)}
@@ -893,7 +897,7 @@ export default function FileBrowser() {
                           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
                       {doc.lockOwnerUserId && (
-                        <div className="absolute -bottom-1 -right-1 bg-amber-100 text-amber-600 rounded-full p-0.5 shadow-sm border border-white" title="Locked">
+                        <div className={`absolute -bottom-1 -right-1 rounded-full p-0.5 shadow-sm border border-white ${doc.lockOwnerUserId === user?.id ? 'bg-indigo-100 text-indigo-600' : 'bg-amber-100 text-amber-600'}`} title="Locked">
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                           </svg>
@@ -985,7 +989,7 @@ export default function FileBrowser() {
             onMoveFileRequest={(id, name, folderId) => setItemToMove({ id, type: 'file', name, currentParentId: folderId })}
             onFileClick={file => {
               setSelectedFile(file)
-              setSelectedDocument(null)
+              setSelectedDocumentId(null)
             }}
             formatBytes={formatBytes}
           />
@@ -1007,7 +1011,7 @@ export default function FileBrowser() {
         teamId={teamId}
         currentUserId={user?.id ?? 0}
         isAdmin={teamQuery.data?.myRole === 'admin'}
-        onClose={() => setSelectedDocument(null)}
+        onClose={() => setSelectedDocumentId(null)}
       />
 
       {/* ── Create Folder Modal ────────────────────────────────────────────── */}

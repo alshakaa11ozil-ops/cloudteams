@@ -36,6 +36,8 @@ import {
     forceUnlockDocument,
 } from '../api/documents'
 
+import ShareLinkModal from './ShareLinkModal'
+
 interface DocumentDetailSidebarProps {
     document: DocumentSummary | null
     teamId: number
@@ -558,7 +560,7 @@ function DocumentLockTab({
                   <p className="text-sm text-slate-600 mt-1">
                     {isLockedByMe
                       ? 'You hold the lock for this document.'
-                      : `Being edited by another user (ID: ${document.lockOwnerUserId})`}
+                      : `Being edited by another user: ${(document as any).lockOwnerName || document.lockOwnerUserId}`}
                   </p>
                   
                   {isLockedByMe && (
@@ -617,6 +619,7 @@ export default function DocumentDetailSidebar({
 }: DocumentDetailSidebarProps) {
     const navigate = useNavigate()
     const [activeTab, setActiveTab] = useState<TabId>('preview')
+    const [isShareModalOpen, setIsShareModalOpen] = useState(false)
 
     if (!document) return null
 
@@ -722,14 +725,20 @@ export default function DocumentDetailSidebar({
                             Share this document with people outside your team.
                         </p>
                         <button
-                            onClick={() => navigate(`/teams/${teamId}/documents/${document.id}`)}
+                            onClick={() => setIsShareModalOpen(true)}
                             className="w-full py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
                         >
-                            Open & share from editor
+                            Create Share Link
                         </button>
-                        <p className="text-xs text-gray-400 text-center">
-                            Share links for documents can be created from inside the editor.
-                        </p>
+                        {isShareModalOpen && (
+                            <ShareLinkModal
+                                itemType="document"
+                                itemId={document.id}
+                                teamId={teamId}
+                                itemName={document.title}
+                                onClose={() => setIsShareModalOpen(false)}
+                            />
+                        )}
                     </div>
                 )}
 

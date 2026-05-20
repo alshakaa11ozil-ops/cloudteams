@@ -39,7 +39,7 @@ import CollaborativeEditor, { type DocumentName } from '../components/editor/Col
 import type { AxiosError } from 'axios'
 import axios from 'axios'
 import { useAuth } from '../hooks/useAuth'
-import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument } from '../api/documents'
+import { fetchDocument, renameDocument, lockDocument, unlockDocument, forceUnlockDocument, previewDocument } from '../api/documents'
 import { unlockFile } from '../api/files'
 import { exportToDocx } from '../utils/exportDocx'
 import socket from '../api/socket'
@@ -365,7 +365,11 @@ export default function DocumentEditor() {
   // --------------------------------------------------------------------------
   const handleExport = async () => {
     console.log('[handleExport] Clicked! isExporting:', isExporting, 'editorRef:', !!editorRef.current)
-    if (!editorRef.current || isExporting) return
+    if (isExporting) return
+    if (!editorRef.current) {
+      toast.error('Cannot export document to .docx while in read-only mode.');
+      return;
+    }
     setIsExporting(true)
     try {
       const json = editorRef.current.getJSON()
@@ -387,7 +391,7 @@ export default function DocumentEditor() {
     new Date(lockExpiresAt) > new Date()
 
   const isLockedByMe = isLockActive && lockOwnerUserId === user?.id
-  const isLockedByOther = isLockActive && lockOwnerUserId !== user?.id
+  const isLockedByOther = isLockActive && lockOwnerUserId !== null && user?.id !== undefined && lockOwnerUserId !== user.id
 
   const handleToggleLock = async () => {
     if (!teamId || !docId || isLockLoading) return
@@ -546,7 +550,7 @@ export default function DocumentEditor() {
 
         {/* Right side — Share, Export, and History buttons */}
         <div className="flex items-center gap-2">
-          {mode === 'document' && !isLockedByOther && (
+          {mode === 'document' && (
             <div className="flex items-center gap-1 bg-slate-700/50 p-1 rounded-lg">
               <button
                 onClick={() => setIsShareModalOpen(true)}
@@ -625,7 +629,7 @@ export default function DocumentEditor() {
             </div>
           )}
 
-          {mode === 'document' && !isLockedByOther && (
+          {mode === 'document' && (
             <button
               onClick={() => setShowHistory(!showHistory)}
               className={`
@@ -640,8 +644,7 @@ export default function DocumentEditor() {
             </button>
           )}
 
-          {!isLockedByOther && (
-            <button
+          <button
               onClick={handleExport}
               disabled={isExporting || loadState !== 'connected'}
               title="Export as .docx"
@@ -656,25 +659,27 @@ export default function DocumentEditor() {
               ? <Loader2 size={14} className="animate-spin" />
               : <Download size={14} />
             }
-              <span>{isExporting ? 'Exporting...' : 'Export .docx'}</span>
             </button>
-          )}
         </div>
       </header>
 
       {/* ── Main Content Area ───────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden flex relative">
         <div className="flex-1 overflow-hidden">
-          <CollaborativeEditor
-            key={editorKey}
-            documentName={documentName}
-            initialContent={initialContent}
-            onReady={() => setLoadState('connected')}
-            onEditorReady={(editor) => { editorRef.current = editor }}
-            readOnly={isLockedByOther}
-            currentUser={user!}
-            teamId={teamId!}
-          />
+          {mode === 'document' && isLockedByOther ? (
+            <LockedDocumentViewer teamId={teamId!} docId={docId!} onReady={() => setLoadState('connected')} />
+          ) : (
+            <CollaborativeEditor
+              key={editorKey}
+              documentName={documentName}
+              initialContent={initialContent}
+              onReady={() => setLoadState('connected')}
+              onEditorReady={(editor) => { editorRef.current = editor }}
+              readOnly={isLockedByOther}
+              currentUser={user!}
+              teamId={teamId!}
+            />
+          )}
         </div>
 
         {/* Side Panels */}
@@ -711,6 +716,41 @@ export default function DocumentEditor() {
           onClose={() => setIsShareModalOpen(false)}
         />
       )}
+    </div>
+  )
+}
+
+function LockedDocumentViewer({ teamId, docId, onReady }: { teamId: string, docId: string, onReady: () => void }) {
+  const [html, setHtml] = useState<string | null>(null)
+  
+  useEffect(() => {
+    previewDocument(parseInt(teamId, 10), parseInt(docId, 10))
+      .then(res => {
+        setHtml(res.html)
+        onReady()
+      })
+      .catch(err => {
+        console.error(err)
+        onReady() 
+      })
+  }, [teamId, docId, onReady])
+
+  if (!html) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-slate-900 h-full min-h-64">
+        <div className="flex items-center gap-3 text-slate-400">
+          <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+          <span className="text-sm">Loading preview...</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-slate-900 overflow-y-auto">
+      <div className="flex-1 max-w-4xl w-full mx-auto p-12 bg-white text-slate-900 shadow-sm min-h-[1056px] doc-preview-content my-8 rounded">
+        <div dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
     </div>
   )
 }
