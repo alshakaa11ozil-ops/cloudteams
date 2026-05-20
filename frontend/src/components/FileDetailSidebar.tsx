@@ -326,7 +326,11 @@ export default function FileDetailSidebar({
   // ── Conditional render AFTER all hooks ────────────────────────────────────
   if (!file) return null
 
-  const isLocked = lockStatus?.isLocked ?? false
+  // Check if locked and ensure the lock has not expired yet (handles backend not verifying expiration)
+  const isLocked = (lockStatus?.isLocked ?? false) && 
+    (lockStatus?.lockExpiresAt 
+        ? new Date(lockStatus.lockExpiresAt) > new Date() 
+        : true)
   const isLockedByMe = lockStatus?.lockedBy?.id === currentUserId
   const isAdmin = userRole === 'admin'
 

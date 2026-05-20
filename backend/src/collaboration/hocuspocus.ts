@@ -429,7 +429,8 @@ const collabServer = new Hocuspocus({
                                         }
                                     })
                                     console.log(`[Hocuspocus] ✅ store() created v1 snapshot for doc ${id}`)
-                                    emitToTeam(prevDoc.team_id, SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, {
+                                    const teamId = prevDoc.team_id
+                                    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, {
                                         documentId: id,
                                         versionName: 'Initial version',
                                     })

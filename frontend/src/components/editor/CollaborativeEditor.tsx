@@ -206,9 +206,9 @@ export default function CollaborativeEditor(props: CollaborativeEditorProps) {
         // not a real auth failure. The actual lock toast is shown by
         // DocumentEditor via Socket.io. Don't double-toast here.
         if (reason !== 'permission-denied') {
-            toast.error(`Authentication failed: ${reason}`)
+          toast.error(`Authentication failed: ${reason}`)
         }
-    },
+      },
     })
 
     if (!destroyed) {
