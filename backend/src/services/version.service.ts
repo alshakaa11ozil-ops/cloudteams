@@ -29,11 +29,28 @@ export const createVersion = async (
     const versionCount = await tx.fileVersion.count({ where: { file_id: fileId } });
     const nextVersionNumber = versionCount + 1;
 
-    // Dedup guard: never create a duplicate version at the same number
+    // ─── Duplicate Guard 1: Version Number ───────────────────────────────────
+    // If a version already exists at the calculated version_number, return it.
     const alreadyExists = await tx.fileVersion.findFirst({
         where: { file_id: fileId, version_number: nextVersionNumber }
     });
     if (alreadyExists) return alreadyExists;
+
+    // ─── Duplicate Guard 2: Rapid Fire Cooldown ──────────────────────────────
+    // If a version was created for this file in the last 5 seconds, skip.
+    // This handles race conditions where two requests (e.g. double upload)
+    // pass the count check at the same time.
+    const recentVersion = await tx.fileVersion.findFirst({
+        where: {
+            file_id: fileId,
+            created_at: { gte: new Date(Date.now() - 5000) } // 5 second window
+        },
+        orderBy: { created_at: 'desc' }
+    });
+    if (recentVersion) {
+        console.log(`[createVersion] ⏳ Cooldown: skipping duplicate version for file ${fileId} (created ${recentVersion.created_at})`);
+        return recentVersion;
+    }
 
     return tx.fileVersion.create({
         data: {
@@ -43,6 +60,7 @@ export const createVersion = async (
             file_size: file.file_size,
             uploaded_by: file.uploaded_by,
             encryption_iv: file.encryption_iv,
+            version_name: nextVersionNumber === 1 ? 'Initial version' : null,
             yjs_state: file.yjs_state,
         },
     });
