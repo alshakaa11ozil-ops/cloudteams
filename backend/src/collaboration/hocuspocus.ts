@@ -30,6 +30,8 @@ import * as Y from 'yjs'
 import prisma from '../config/database'
 import { verifyToken } from '../utils/jwt'
 import { assertTeamMember } from '../utils/teamGuard'
+import { emitToTeam } from '../socket'
+import { SOCKET_EVENTS } from '../config/socketEvents'
 
 // ---------------------------------------------------------------------------
 // HELPER: parseDocumentName
@@ -382,7 +384,7 @@ const collabServer = new Hocuspocus({
                         // so we can detect the very first real write.
                         const prevDoc = await prisma.documents.findFirst({
                             where: { id, is_deleted: false },
-                            select: { yjs_state: true, created_by: true }
+                            select: { yjs_state: true, created_by: true, team_id: true }
                         })
 
                         const result = await prisma.documents.updateMany({
@@ -416,6 +418,12 @@ const collabServer = new Hocuspocus({
                                         }
                                     })
                                     console.log(`[Hocuspocus] ✅ store() created v1 snapshot for doc ${id}`)
+
+                                    const teamId = prevDoc.team_id
+                                    emitToTeam(teamId, SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, {
+                                        documentId: id,
+                                        versionName: 'Initial version',
+                                    })
                                 }
                             }
                         }

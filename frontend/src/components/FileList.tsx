@@ -96,7 +96,11 @@ function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, o
   })
 
   const lockStatus = lockQuery.data
-  const isLocked = lockStatus?.isLocked ?? false
+  // Check if locked and ensure the lock has not expired yet (handles backend not verifying expiration)
+  const isLocked = (lockStatus?.isLocked ?? false) && 
+    (lockStatus?.lockExpiresAt 
+        ? new Date(lockStatus.lockExpiresAt) > new Date() 
+        : true)
   const lockedByOther = isLocked && lockStatus?.lockedBy?.id !== currentUserId
 
   return (
@@ -223,7 +227,7 @@ function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, o
 
             if (!isEditable) return null
 
-            return (
+            return lockedByOther ? null : (
               <a
                 href={`/teams/${teamId}/files/${file.id}/edit`}
                 onClick={e => e.stopPropagation()} // Prevent opening sidebar
@@ -231,7 +235,6 @@ function FileCard({ file, teamId, currentUserId, folderId, onDelete, onRename, o
                   col-span-2 py-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800
                   hover:bg-indigo-50 flex items-center justify-center gap-1
                   transition-colors border-t border-gray-100
-                  disabled:opacity-50 disabled:cursor-not-allowed
                 "
                 title="Edit in real-time"
               >
