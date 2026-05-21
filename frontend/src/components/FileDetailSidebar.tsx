@@ -372,7 +372,7 @@ export default function FileDetailSidebar({
 
         <div className="flex items-center gap-2 flex-shrink-0">
           {/* 1. Navigate to Edit Page (Indigo) */}
-          {isEditable && !isLocked && (
+          {isEditable && (!isLocked || isLockedByMe) && (
             <button
               onClick={() => navigate(`/teams/${teamId}/files/${file.id}/edit`)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"

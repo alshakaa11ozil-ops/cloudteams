@@ -129,6 +129,8 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
+import socket from '../../api/socket'
+import { SOCKET_EVENTS } from '../../socketEvents'
 
 import './editor.css'
 import PresenceBar from './PresenceBar'
@@ -278,6 +280,7 @@ interface EditorInnerProps extends CollaborativeEditorProps {
 }
 
 function EditorInner({
+  documentName,
   initialContent,
   onReady,
   onEditorReady,
@@ -507,6 +510,34 @@ function EditorInner({
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [connectionStatus, hasUnsavedChanges])
+
+  // ── Version & Restore socket listeners ────────────────────────────────────
+  useEffect(() => {
+    if (!socket || !documentName) return
+
+    const docId = parseInt(documentName.split('-')[1], 10)
+
+    const handleVersionCreated = (payload: any) => {
+      // Only toast if it's THIS document and NOT created by me (my component already toasts on success)
+      if (payload.documentId === docId && payload.createdBy !== currentUser.id) {
+        toast.success('A new version of this document was saved by a teammate', { icon: '📝' })
+      }
+    }
+
+    const handleRestored = (payload: any) => {
+      if (payload.documentId === docId && payload.restoredBy !== currentUser.id) {
+        toast.success('Document restored to an older version by a teammate', { icon: '🕒' })
+      }
+    }
+
+    socket.on(SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, handleVersionCreated)
+    socket.on(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
+
+    return () => {
+      socket.off(SOCKET_EVENTS.DOCUMENT_VERSION_CREATED, handleVersionCreated)
+      socket.off(SOCKET_EVENTS.DOCUMENT_RESTORED, handleRestored)
+    }
+  }, [socket, documentName, currentUser.id])
 
   // ── RENDER ────────────────────────────────────────────────────────────────
   return (

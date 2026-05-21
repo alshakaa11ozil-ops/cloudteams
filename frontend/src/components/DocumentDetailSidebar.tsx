@@ -23,8 +23,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
+import { Clock, Info, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
-import type { DocumentSummary } from '../types'
 import {
     fetchDocumentComments,
     addDocumentComment,
@@ -34,7 +34,9 @@ import {
     lockDocument,
     unlockDocument,
     forceUnlockDocument,
+    fetchDocumentVersions,
 } from '../api/documents'
+import type { DocumentSummary } from '../types'
 
 import ShareLinkModal from './ShareLinkModal'
 
@@ -326,24 +328,18 @@ function DocumentPreview({ document, teamId }: { document: DocumentSummary; team
 }
 
 // ---------------------------------------------------------------------------
-// DocumentVersionsTab — NEW
-//
-// PURPOSE: Explain the document auto-save model and show the last saved time.
-//
-// WHY NO VERSION ROWS:
-//   Files use FileVersion snapshots (one row per upload).
-//   Documents use Yjs CRDT continuous auto-save — Hocuspocus stores the
-//   complete document state every 5 seconds during editing AND on the last
-//   client disconnect. There is no per-keystroke history table — that would
-//   produce thousands of rows per session with no meaningful difference between
-//   adjacent entries.
-//
-//   The document prop already contains: createdAt, lastSaved, creatorName.
-//   No API call needed — we display what we have.
+// DocumentVersionsTab
 // ---------------------------------------------------------------------------
 
-function DocumentVersionsTab({ document }: { document: DocumentSummary }) {
+function DocumentVersionsTab({ document, teamId }: { document: DocumentSummary; teamId: number }) {
     const hasSave = !!document.lastSaved
+
+    const versionsQuery = useQuery({
+        queryKey: ['document-versions', document.id],
+        queryFn: () => fetchDocumentVersions(teamId, document.id)
+    })
+
+    const versions = versionsQuery.data || []
 
     return (
         <div className="space-y-4">
@@ -362,12 +358,10 @@ function DocumentVersionsTab({ document }: { document: DocumentSummary }) {
                     ${hasSave ? 'bg-emerald-100' : 'bg-amber-100'}
                 `}>
                     {hasSave ? (
-                        /* Checkmark — saved */
                         <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                         </svg>
                     ) : (
-                        /* Clock — never saved */
                         <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
@@ -386,96 +380,66 @@ function DocumentVersionsTab({ document }: { document: DocumentSummary }) {
                 </div>
             </div>
 
-            {/* Timeline — two events we always know */}
+            {/* Versions List */}
             <div>
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                    Save History
+                    Version History
                 </h3>
 
-                <div className="relative">
-                    {/* Vertical connector line */}
-                    <div className="absolute left-3.5 top-4 bottom-4 w-px bg-gray-200" />
-
-                    <div className="space-y-0">
-
-                        {/* Last saved — only show if different from created */}
-                        {hasSave && (
-                            <div className="flex gap-3 pb-4 relative">
-                                <div className="w-7 h-7 rounded-full bg-indigo-100 border-2 border-white flex items-center justify-center flex-shrink-0 z-10 shadow-sm">
-                                    <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                            d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                                    </svg>
-                                </div>
-                                <div className="flex-1 pt-0.5">
-                                    <p className="text-sm font-medium text-gray-800">Last auto-saved</p>
-                                    <p className="text-xs text-gray-500 mt-0.5">
-                                        {format(new Date(document.lastSaved!), "MMM d, yyyy 'at' HH:mm:ss")}
-                                    </p>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Document created */}
-                        <div className="flex gap-3 relative">
-                            <div className="w-7 h-7 rounded-full bg-gray-100 border-2 border-white flex items-center justify-center flex-shrink-0 z-10 shadow-sm">
-                                <svg className="w-3.5 h-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                        d="M12 4v16m8-8H4" />
-                                </svg>
-                            </div>
-                            <div className="flex-1 pt-0.5">
-                                <p className="text-sm font-medium text-gray-800">Document created</p>
-                                <p className="text-xs text-gray-500 mt-0.5">
-                                    {format(new Date(document.createdAt), "MMM d, yyyy 'at' HH:mm")}
-                                    {document.creatorName && (
-                                        <span className="text-gray-400"> · by {document.creatorName}</span>
-                                    )}
-                                </p>
-                            </div>
-                        </div>
-
-                    </div>
-                </div>
+                {versionsQuery.isLoading ? (
+                  <div className="flex justify-center p-4">
+                    <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : versions.length === 0 ? (
+                  <div className="text-center p-6 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                    <p className="text-xs text-gray-500">No manual versions yet.</p>
+                  </div>
+                ) : (
+                  <div className="relative">
+                      <div className="absolute left-3.5 top-4 bottom-4 w-px bg-gray-200" />
+  
+                      <div className="space-y-4">
+                          {versions.map((version: any, idx: number) => (
+                              <div key={version.id} className="flex gap-3 relative group">
+                                  <div className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center flex-shrink-0 z-10 shadow-sm group-hover:border-indigo-300 transition-colors">
+                                      <Clock className="w-3.5 h-3.5 text-gray-400 group-hover:text-indigo-500" />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <p className="text-sm font-medium text-gray-800 truncate">
+                                          {version.versionName || (idx === 0 ? 'Latest Snapshot' : `Version ${versions.length - idx}`)}
+                                        </p>
+                                        <button 
+                                          onClick={() => toast.error("Open the document editor to restore versions.")}
+                                          className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase"
+                                          title="Restore from editor"
+                                        >
+                                          Restore
+                                        </button>
+                                      </div>
+                                      <p className="text-[10px] text-gray-500 mt-1">
+                                          {format(new Date(version.createdAt), "MMM d, h:mm a")}
+                                          {version.creatorName && ` · ${version.creatorName}`}
+                                      </p>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+                )}
             </div>
 
-            {/* Explanation card */}
-            {/* 
-                WHY THIS CARD EXISTS:
-                Users familiar with file version history expect a list of numbered versions.
-                Documents work differently — Yjs CRDT is the version history, stored as a
-                single binary blob that is continuously updated. Showing an empty list with
-                no explanation would confuse users. This card makes the design decision explicit.
-            */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                <div className="flex gap-2.5">
-                    <svg className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div className="space-y-1.5">
-                        <p className="text-xs font-semibold text-slate-600">How document saving works</p>
-                        <p className="text-xs text-slate-500 leading-relaxed">
-                            Documents are saved automatically every 5 seconds while you
-                            type and again when the last editor closes the tab. This uses
-                            a conflict-free collaborative data structure (Yjs CRDT) that
-                            merges edits from multiple people simultaneously — no manual
-                            save needed.
-                        </p>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                            Unlike uploaded files, documents don't have numbered version
-                            snapshots. The auto-save state is always the most recent version.
-                        </p>
-                    </div>
-                </div>
+            {/* Document created info - small footer */}
+            <div className="pt-2 border-t border-gray-100 flex items-center gap-2 text-[10px] text-gray-400">
+                <Info size={12} />
+                <span>Document created {new Date(document.createdAt).toLocaleDateString()}</span>
             </div>
-
         </div>
     )
 }
 
 // ---------------------------------------------------------------------------
-// DocumentLockTab — NEW
+// DocumentLockTab
 // ---------------------------------------------------------------------------
 
 function DocumentLockTab({
@@ -560,7 +524,7 @@ function DocumentLockTab({
                   <p className="text-sm text-slate-600 mt-1">
                     {isLockedByMe
                       ? 'You hold the lock for this document.'
-                      : `Being edited by another user: ${(document as any).lockOwnerName || document.lockOwnerUserId}`}
+                      : `Being edited by another user: ${document.lockOwnerName || document.lockOwnerUserId}`}
                   </p>
                   
                   {isLockedByMe && (
@@ -593,9 +557,7 @@ function DocumentLockTab({
                       disabled={isForcing}
                       className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
-                      </svg>
+                      <RotateCcw className="w-3.5 h-3.5" />
                       {isForcing ? 'Releasing...' : 'Force Release Lock'}
                     </button>
                   </div>
@@ -623,7 +585,6 @@ export default function DocumentDetailSidebar({
 
     if (!document) return null
 
-    // Added 'versions' and 'lock' tab
     const tabs: { id: TabId; label: string }[] = [
         { id: 'preview', label: 'Preview' },
         { id: 'comments', label: 'Comments' },
@@ -651,16 +612,18 @@ export default function DocumentDetailSidebar({
                 </div>
 
                 <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
-                    <button
-                        onClick={() => navigate(`/teams/${teamId}/documents/${document.id}`)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
-                    >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        Open
-                    </button>
+                    {(!document.lockOwnerUserId || document.lockOwnerUserId === currentUserId) && (
+                        <button
+                            onClick={() => navigate(`/teams/${teamId}/documents/${document.id}`)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            Open
+                        </button>
+                    )}
                     <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -705,9 +668,8 @@ export default function DocumentDetailSidebar({
                     </div>
                 )}
 
-                {/* NEW: Versions tab */}
                 {activeTab === 'versions' && (
-                    <DocumentVersionsTab document={document} />
+                    <DocumentVersionsTab document={document} teamId={teamId} />
                 )}
 
                 {activeTab === 'lock' && (

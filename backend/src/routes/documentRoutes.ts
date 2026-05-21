@@ -62,6 +62,6 @@ router.post('/:docId/unlock', unlockDocument)
 router.post('/:docId/force-unlock', forceUnlockDocument)
 
 // Mount versioning routes
-router.use('/', documentVersionRoutes)
+router.use('/:docId', documentVersionRoutes)
 
 export default router

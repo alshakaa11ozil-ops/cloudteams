@@ -276,16 +276,9 @@ export const uploadFile = async (
         data: { storage_path: storagePath },
     });
 
-    // ─── Create v1 snapshot for brand-new file ──────────────────────────────
-    // WHY: The version history panel expects at least one entry to exist.
-    //      createVersion reads from the DB, so we call it AFTER storage_path
-    //      is finalized (no longer 'pending').
-    try {
-        await createVersion(finalFile.id);
-    } catch (err: any) {
-        // Non-fatal — the file is saved. Just log and continue.
-        console.warn('[upload] Could not create v1 snapshot:', err.message);
-    }
+    // Removed deliberate v1 snapshot creation here.
+    // listVersions dynamically prepends a "Current" version, so avoiding a DB snapshot
+    // ensures a newly uploaded file only shows as Version 1 (current).
 
     void logActivity({
         teamId, userId: uploadedBy,

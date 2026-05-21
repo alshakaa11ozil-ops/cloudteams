@@ -107,6 +107,7 @@ export interface DocumentSummary {
   updatedAt: string
   deletedAt?: string | null
   lockOwnerUserId?: number | null
+  lockOwnerName?: string | null
   lockExpiresAt?: string | null
 }
 

@@ -46,6 +46,7 @@ export interface DocumentSummary {
     updatedAt: Date
     deletedAt?: Date | null
     lockOwnerUserId?: number | null
+    lockOwnerName?: string | null
     lockExpiresAt?: Date | null
 }
 
@@ -129,6 +130,9 @@ export async function listDocuments(teamId: number, folderId?: number | null): P
             lockExpiresAt: true,
             users: {
                 select: { full_name: true, username: true }
+            },
+            lockOwner: {
+                select: { full_name: true, username: true }
             }
         },
         orderBy: { updated_at: 'desc' }
@@ -144,6 +148,7 @@ export async function listDocuments(teamId: number, folderId?: number | null): P
         createdAt: d.created_at,
         updatedAt: d.updated_at,
         lockOwnerUserId: d.lockOwnerUserId,
+        lockOwnerName: d.lockOwner?.full_name ?? d.lockOwner?.username ?? null,
         lockExpiresAt: d.lockExpiresAt,
     }))
 }
@@ -173,6 +178,9 @@ export async function getDocument(docId: number, teamId: number): Promise<Docume
             lockExpiresAt: true,
             users: {
                 select: { full_name: true, username: true }
+            },
+            lockOwner: {
+                select: { full_name: true, username: true }
             }
         }
     })
@@ -189,6 +197,7 @@ export async function getDocument(docId: number, teamId: number): Promise<Docume
         createdAt: doc.created_at,
         updatedAt: doc.updated_at,
         lockOwnerUserId: doc.lockOwnerUserId,
+        lockOwnerName: doc.lockOwner?.full_name ?? doc.lockOwner?.username ?? null,
         lockExpiresAt: doc.lockExpiresAt,
     }
 }

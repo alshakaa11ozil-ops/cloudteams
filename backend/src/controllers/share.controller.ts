@@ -310,8 +310,8 @@ export const listFileLinksHandler = async (req: Request, res: Response): Promise
 // OUTPUTS: 200 with array of SharedLink rows
 export const listDocumentLinksHandler = async (req: Request, res: Response): Promise<void> => {
     try {
-        const documentId = parseInt(req.params.id as string, 10);
-        const teamId = parseInt(req.query.teamId as string, 10);
+        const documentId = parseInt((req.params.docId || req.params.id) as string, 10);
+        const teamId = parseInt((req.params.teamId || req.query.teamId) as string, 10);
 
         if (isNaN(documentId) || isNaN(teamId)) {
             res.status(400).json({ error: 'Valid documentId and teamId are required' });
